@@ -13,11 +13,11 @@ export interface TransformPreset {
   scalePercent: number;
 }
 
-// Per-shape defaults: round displays default to a slightly-inset centered
-// scale so art doesn't get clipped hard by the circular bezel; rect
-// displays default to a plain edge-to-edge cover fit.
+// Per-shape defaults: round displays default to "contain" so the whole
+// image is visible (no cropping) on first load; rect displays default to
+// a plain edge-to-edge cover fit.
 export const DEFAULT_TRANSFORM_BY_SHAPE: Record<DisplayShape, TransformPreset> = {
-  round: { mode: "center-scale", scalePercent: 91 },
+  round: { mode: "contain", scalePercent: 100 },
   rect: { mode: "cover", scalePercent: 100 },
 };
 

@@ -124,6 +124,11 @@ export class SerialLink extends EventTarget {
         this.pendingAck = null;
       } else if (token.endsWith("ttyrdy")) {
         this.dispatchEvent(new CustomEvent("ready"));
+      } else {
+        // Anything else (e.g. CMDHWINF's "HW<id>;<version>;" reply) - not
+        // otherwise consumed, so surface it for callers that want to show
+        // raw device output (see main.ts's command console).
+        this.dispatchEvent(new CustomEvent("message", { detail: token }));
       }
     }
   }
