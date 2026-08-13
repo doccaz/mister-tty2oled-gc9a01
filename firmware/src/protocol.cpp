@@ -2,6 +2,7 @@
 #include "display.h"
 #include "oled_status.h"
 #include <Arduino.h>
+#include <cstring>
 
 namespace {
 
@@ -31,6 +32,24 @@ int cDelay = 15;         // ms delay before ttyack;, mirrors original cDelay
 bool sendTTYACK = true;  // CMDSTTYACK toggle
 unsigned long lastActivityMs = 0; // millis() of last dispatched line, for oled_status.cpp
 
+constexpr const char *FW_VERSION = "0.1.0";
+constexpr uint16_t DEFAULT_TRANSITION_MS = 600; // CMDSPIC has no duration param in the wire format
+
+// Tracks which buffer/kind the last successfully-drawn picture came from,
+// so CMDSPIC/CMDSSCP can redisplay it without needing the MiSTer to
+// resend the bytes - legacyBuf/colorBuf/g_frame already persist between
+// commands, this just remembers which one is current.
+enum class PictureKind { NONE, XBM, GSC, JPEG };
+PictureKind lastPictureKind = PictureKind::NONE;
+
+// CMDSAVER/CMDSWSAVER: parses the reference's full <mode>,<interval>,
+// <logotime> grammar (so a real tty2oled.sh never errors) but only
+// implements simple blank-on-idle, not the original's animated
+// multi-screen/starfield/toaster screensaver system - see CLAUDE.md.
+bool saverEnabled = false;
+unsigned long saverIntervalMs = 60000;
+bool saverBlanked = false;
+
 // Debug channel: hardware UART0 (GPIO20/21, via an external USB-serial
 // adapter), completely independent of the native USB-CDC "Serial" object
 // used for the actual protocol - useful for diagnosing anything wrong with
@@ -57,6 +76,48 @@ String splitField(const String &s, int index) {
     start = comma + 1;
   }
   return "";
+}
+
+// Clamps to our curated 1..5 effect set (see transitionReveal() in
+// display.cpp) and resolves -1 ("no parameter"/"random", matching the
+// reference's convention) to a random pick - shared by every command that
+// takes a transition effect, so -1 means the same thing everywhere.
+uint8_t resolveEffect(int t) {
+  if (t < -1) t = -1;
+  if (t > 5) t = 5;
+  if (t == -1) t = random(1, 6); // random(min, max+1)
+  return (uint8_t)t;
+}
+
+// Like splitField(), but returns -1 (not 0) when the field is absent -
+// the convention CMDSPIC/CMDCOR/CMDAPD use for "no effect given" before
+// resolveEffect() turns that into a random pick.
+int splitFieldEffect(const String &cmd, int index) {
+  String f = splitField(cmd, index);
+  return f.length() ? f.toInt() : -1;
+}
+
+// Redraws whatever was last shown (picture or corename text), with the
+// given transition effect. Backs CMDSPIC directly, and is also what makes
+// CMDDON/the screensaver's wake-up actually restore content: display_off()
+// blanks by content (see its comment in display.cpp - backlight PWM alone
+// is confirmed to have no effect on at least one real GC9A01 module), so
+// display_on() alone doesn't bring anything back - this does.
+void redisplayCurrent(uint8_t effect) {
+  switch (lastPictureKind) {
+    case PictureKind::JPEG:
+      display_replay_jpeg(effect, DEFAULT_TRANSITION_MS);
+      break;
+    case PictureKind::XBM:
+      display_draw_legacy_xbm(legacyBuf, effect);
+      break;
+    case PictureKind::GSC:
+      display_draw_legacy_gsc(legacyBuf, effect);
+      break;
+    case PictureKind::NONE:
+      display_show_corename(actCorename);
+      break;
+  }
 }
 
 // Reads exactly `size` bytes into buf, matching the original's blocking
@@ -120,9 +181,11 @@ void handleLegacyPicture(const String &cmd, int prefixLen) {
   size_t n = readFixed(legacyBuf, LEGACY_BUF_SIZE);
   oled_status_resume();
   if (n == 2048) {
-    display_draw_legacy_xbm(legacyBuf, effect < 0 ? 1 : (uint8_t)effect);
+    display_draw_legacy_xbm(legacyBuf, resolveEffect(effect));
+    lastPictureKind = PictureKind::XBM;
   } else if (n == 8192) {
-    display_draw_legacy_gsc(legacyBuf, effect < 0 ? 1 : (uint8_t)effect);
+    display_draw_legacy_gsc(legacyBuf, resolveEffect(effect));
+    lastPictureKind = PictureKind::GSC;
   } else {
     display_show_error("Picture xfer error: " + String(n));
   }
@@ -156,6 +219,7 @@ void handleColorPicture(const String &cmd) {
 
   actCorename = name;
   display_draw_jpeg(colorBuf, (size_t)length, (uint8_t)effect, (uint16_t)durationMs);
+  lastPictureKind = PictureKind::JPEG;
 }
 
 void dispatch(const String &cmd) {
@@ -178,6 +242,7 @@ void dispatch(const String &cmd) {
     display_off();
   } else if (cmd == "CMDDON") {
     display_on();
+    redisplayCurrent(0); // instant - display_off() blanked by content, not just backlight, see its comment
   } else if (cmd == "CMDDUPD") {
     display_flush();
   } else if (cmd.startsWith("CMDTXT")) {
@@ -214,6 +279,88 @@ void dispatch(const String &cmd) {
     display_set_rotation((uint8_t)splitField(cmd, 1).toInt());
   } else if (cmd.startsWith("CMDSTTYACK")) {
     sendTTYACK = splitField(cmd, 1).toInt() != 0;
+  } else if (cmd == "CMDBYE") {
+    display_show_bye();
+  } else if (cmd == "CMDTEST") {
+    display_show_test_pattern();
+  } else if (cmd == "CMDSHSYSHW") {
+    display_show_sysinfo(FW_VERSION);
+  } else if (cmd == "CMDHWINF") {
+    // Reply grammar matches the reference (<hwid>;<version>;), but the id
+    // itself is our own - a new device type outside the reference's
+    // enum. Only its own installer.sh keys off this string, not
+    // tty2oled.sh itself (confirmed against reference/), so an unknown id
+    // is safe. No trailing newline: web/src/serial.ts tokenizes on ";",
+    // not "\n", matching how ttyack;/ttyrdy; are already sent.
+    Serial.print("HWGC9A01C;");
+    Serial.print(FW_VERSION);
+    Serial.print(";");
+  } else if (cmd.startsWith("CMDCLST")) {
+    // CMDCLST,<transition>,<color 0-15> - fill screen with a solid
+    // 4bpp-grayscale color and reveal it with a transition. Reused
+    // wholesale through the existing legacy-GSC draw path (fill legacyBuf
+    // with the solid color, exactly like the reference fills logoBin)
+    // rather than adding a separate solid-fill code path, so CMDSPIC/
+    // CMDSSCP redisplay of a CMDCLST screen falls out for free.
+    String tT = splitField(cmd, 1);
+    String cT = splitField(cmd, 2);
+    if (tT.length() == 0 || cT.length() == 0) {
+      display_show_error("CMDCLST needs transition,color");
+    } else {
+      int c = cT.toInt();
+      if (c < 0) c = 0;
+      if (c > 15) c = 15;
+      memset(legacyBuf, (uint8_t)((c << 4) | c), LEGACY_BUF_SIZE);
+      actCorename = "No Core";
+      uint8_t effect = resolveEffect(tT.toInt());
+      display_draw_legacy_gsc(legacyBuf, effect);
+      lastPictureKind = PictureKind::GSC;
+    }
+  } else if (cmd.startsWith("CMDSPIC")) {
+    // CMDSPIC[,<effect>] - redisplay the last-drawn picture (any kind)
+    // with a (possibly random) transition. No redecode: JPEG replays
+    // straight from display.cpp's still-resident g_frame, legacy XBM/GSC
+    // replays from legacyBuf, which persists between commands already.
+    redisplayCurrent(resolveEffect(splitFieldEffect(cmd, 1)));
+  } else if (cmd == "CMDSSCP") {
+    // Show the last-drawn picture at reduced ("1/4 area") size - no
+    // effect parameter, matching the reference.
+    switch (lastPictureKind) {
+      case PictureKind::JPEG:
+        display_draw_jpeg_small();
+        break;
+      case PictureKind::XBM:
+        display_draw_legacy_xbm_small(legacyBuf);
+        break;
+      case PictureKind::GSC:
+        display_draw_legacy_gsc_small(legacyBuf);
+        break;
+      case PictureKind::NONE:
+        display_show_corename(actCorename);
+        break;
+    }
+  } else if (cmd.startsWith("CMDSWSAVER")) {
+    int x = splitField(cmd, 1).toInt();
+    if (x < 0) x = 0;
+    if (x > 1) x = 1;
+    saverEnabled = (x == 1);
+  } else if (cmd.startsWith("CMDSAVER")) {
+    // CMDSAVER,<mode>,<interval>,<logotime> - grammar and range clamps
+    // match the reference exactly (mode 0-255, interval 5-600s, logotime
+    // 20-600s) so a real tty2oled.sh never errors, but only simple
+    // blank-on-idle is implemented (mode>0 => enabled, blank after
+    // <interval> seconds idle via the existing display_off()/on()), not
+    // the reference's animated starfield/toaster/multi-screen system -
+    // see CLAUDE.md "CMDSAVER" for the divergence.
+    int m = splitField(cmd, 1).toInt();
+    int iv = splitField(cmd, 2).toInt();
+    // logotime is parsed for grammar compatibility but intentionally unused.
+    if (m < 0) m = 0;
+    if (m > 255) m = 255;
+    if (iv < 5) iv = 5;
+    if (iv > 600) iv = 600;
+    saverIntervalMs = (unsigned long)iv * 1000UL;
+    saverEnabled = (m > 0);
   } else if (cmd == "CMDRESET") {
     ESP.restart();
   } else if (cmd == "QWERTZ") {
@@ -287,4 +434,24 @@ const String &protocol_get_corename() {
 
 unsigned long protocol_last_activity_ms() {
   return lastActivityMs;
+}
+
+void protocol_saver_check() {
+  if (!saverEnabled) {
+    if (saverBlanked) {
+      display_on();
+      redisplayCurrent(0);
+      saverBlanked = false;
+    }
+    return;
+  }
+  bool shouldBlank = (millis() - lastActivityMs) >= saverIntervalMs;
+  if (shouldBlank && !saverBlanked) {
+    display_off();
+    saverBlanked = true;
+  } else if (!shouldBlank && saverBlanked) {
+    display_on();
+    redisplayCurrent(0);
+    saverBlanked = false;
+  }
 }

@@ -35,6 +35,7 @@ void setup() {
 void loop() {
 #if !RUN_SELF_TEST
   protocol_process();
+  protocol_saver_check();
   oled_status_loop();
 #endif
 }

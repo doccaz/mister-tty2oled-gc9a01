@@ -19,6 +19,9 @@ void display_off();
 void display_show_start_screen();
 void display_show_corename(const String &name);
 void display_show_error(const String &msg);
+void display_show_bye();                        // CMDBYE - built-in text/shape screen, not the original's icon bitmap
+void display_show_test_pattern();                // CMDTEST - concentric color rings, not the original's bitmap
+void display_show_sysinfo(const String &fwVersion); // CMDSHSYSHW
 
 // Text/geometry primitives for CMDTXT / CMDGEO compatibility
 void display_draw_text(int16_t x, int16_t y, uint8_t fontSize, const String &text);
@@ -30,6 +33,21 @@ void display_draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1);
 // by the caller exactly as in the original protocol).
 void display_draw_legacy_xbm(const uint8_t *buf, uint8_t effect); // 1bpp, 2048 bytes
 void display_draw_legacy_gsc(const uint8_t *buf, uint8_t effect); // 4bpp grayscale, 8192 bytes
+
+// Reduced-size ("1/4 area") redisplay of an already-received legacy
+// buffer, for CMDSSCP. No effect parameter - the reference command takes
+// none either.
+void display_draw_legacy_xbm_small(const uint8_t *buf);
+void display_draw_legacy_gsc_small(const uint8_t *buf);
+
+// Re-reveals the already-decoded CMDCORC frame (g_frame) with a new
+// transition, for CMDSPIC - no JPEG redecode needed since the last
+// decoded frame is still sitting in display.cpp's static buffer.
+void display_replay_jpeg(uint8_t effect, uint16_t durationMs);
+
+// Reduced-size ("1/4 area") redisplay of the last-decoded CMDCORC frame,
+// for CMDSSCP. Downsampled directly from g_frame, no redecode.
+void display_draw_jpeg_small();
 
 // New color/round-native art: raw JPEG bytes, decoded on-device, then
 // revealed onto the display using the given transition effect (see
