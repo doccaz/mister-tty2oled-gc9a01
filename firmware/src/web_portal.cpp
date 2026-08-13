@@ -44,6 +44,7 @@ void WebPortal::begin(WifiConfigStore *config, bool apMode) {
   _server.on("/reset", HTTP_POST, [this]() { handleReset(); });
   _server.on("/status", HTTP_GET, [this]() { handleStatus(); });
   if (_apMode) {
+    _server.on("/scan", HTTP_GET, [this]() { handleScan(); });
     _server.onNotFound([this]() { handleRoot(); }); // captive portal
   }
   _server.begin();
@@ -69,13 +70,34 @@ void WebPortal::handleRoot() {
             "<p class='muted'>Join your home WiFi network so this device "
             "is reachable at its own address instead of running its own "
             "access point.</p>"
+            "<button type='button' onclick='doScan()'>Scan for networks</button>"
+            "<select id='ssidList' style='width:100%;margin:.3em 0;display:none'></select>"
             "<form method='POST' action='/save'>"
             "<label>WiFi network name (SSID)</label>"
-            "<input name='ssid' maxlength='63' required>"
+            "<input name='ssid' id='ssid' maxlength='63' required>"
             "<label>Password</label>"
             "<input name='pass' type='password' maxlength='63'>"
             "<button type='submit'>Save &amp; connect</button>"
-            "</form>";
+            "</form>"
+            "<script>"
+            "function doScan(){"
+            "var sel=document.getElementById('ssidList');"
+            "sel.style.display='block';"
+            "sel.innerHTML='<option>Scanning...</option>';"
+            "fetch('/scan').then(function(r){return r.json()}).then(function(j){"
+            "sel.innerHTML='<option value=\"\">Select a network...</option>';"
+            "j.networks.forEach(function(n){"
+            "var opt=document.createElement('option');"
+            "opt.value=n.ssid;"
+            "opt.textContent=(n.open?'':'\\uD83D\\uDD12 ')+n.ssid+' ('+n.rssi+'dBm)';"
+            "sel.appendChild(opt)"
+            "});"
+            "}).catch(function(){sel.innerHTML='<option>Scan failed</option>'})"
+            "}"
+            "document.getElementById('ssidList').addEventListener('change',function(){"
+            "if(this.value)document.getElementById('ssid').value=this.value"
+            "});"
+            "</script>";
   } else {
     body += "<h1>tty2oled status</h1>"
             "<p>Connected to <b>" + htmlEscape(_config->cfg.wifiSsid) + "</b></p>"
@@ -125,6 +147,25 @@ void WebPortal::handleReset() {
 
   delay(300);
   ESP.restart();
+}
+
+void WebPortal::handleScan() {
+  // Synchronous WiFi.scanNetworks() - same pattern as chromecast-esp32's
+  // /wifiscan. Blocks a few seconds, which is fine here: this only runs
+  // in AP mode, on-demand from a button click on the setup form, not on
+  // any hot path.
+  int n = WiFi.scanNetworks();
+  String json = "{\"networks\":[";
+  for (int i = 0; i < n && i < 20; i++) {
+    if (i > 0) json += ",";
+    json += "{\"ssid\":\"" + htmlEscape(WiFi.SSID(i)) + "\",";
+    json += "\"rssi\":" + String(WiFi.RSSI(i)) + ",";
+    json += "\"open\":" + String(WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "true" : "false");
+    json += "}";
+  }
+  json += "]}";
+  WiFi.scanDelete();
+  _server.send(200, "application/json", json);
 }
 
 void WebPortal::handleStatus() {

@@ -560,7 +560,7 @@ void display_show_connecting_wifi(const String &ssid) {
   gfx.print(line);
 }
 
-void display_show_wifi_connected(const String &ssid, const String &ip) {
+void display_show_wifi_connected(const String &ssid, const String &ip, const String &hostname) {
   gfx.fillScreenFast(0x0000);
   gfx.setTextColor(0xFFFF);
   int16_t x1, y1;
@@ -569,17 +569,21 @@ void display_show_wifi_connected(const String &ssid, const String &ip) {
   gfx.setTextSize(2);
   const char *title = "Connected";
   gfx.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
-  gfx.setCursor(DISP_CX - w / 2, DISP_CY - 30);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY - 40);
   gfx.print(title);
 
   gfx.setTextSize(1);
   gfx.getTextBounds(ssid, 0, 0, &x1, &y1, &w, &h);
-  gfx.setCursor(DISP_CX - w / 2, DISP_CY);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY - 12);
   gfx.print(ssid);
 
   gfx.getTextBounds(ip, 0, 0, &x1, &y1, &w, &h);
-  gfx.setCursor(DISP_CX - w / 2, DISP_CY + 20);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY + 8);
   gfx.print(ip);
+
+  gfx.getTextBounds(hostname, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY + 28);
+  gfx.print(hostname);
 }
 
 void display_toggle_wifi_qr() {

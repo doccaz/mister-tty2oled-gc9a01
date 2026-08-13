@@ -656,11 +656,29 @@ Both exactly the kind of thing this project's CLAUDE.md keeps emphasizing
   ~58.4% post-fade-fix baseline plus the feature's own footprint, nowhere
   near the pre-fade-fix 87% danger zone.
 
+### Follow-ups added after initial hardware verification (2026-08-13)
+
+- **mDNS hostname now shown on the "Connected" screen**
+  (`display_show_wifi_connected()` gained a third `hostname` param,
+  `<deviceName>.local`) alongside SSID/IP, so the hostname to type into a
+  browser is visible without needing a laptop/mDNS tooling. Not shown in
+  AP mode - mDNS isn't started until `enterConnected()`, and AP mode's
+  status screen already shows the device's identity via its SSID (which
+  *is* the device name).
+- **WiFi network scan added to the setup form** - a "Scan for networks"
+  button calls the new `GET /scan` route (`web_portal.cpp`'s
+  `handleScan()`, `WiFi.scanNetworks()`, same synchronous pattern as
+  `chromecast-esp32`'s `/wifiscan`), populating a `<select>` that fills
+  the SSID text field on selection. Required changing `enterApMode()`
+  from `WiFi.mode(WIFI_AP)` to `WIFI_AP_STA` - a pure-AP-mode scan simply
+  fails, since `WiFi.scanNetworks()` needs the STA interface active even
+  though STA isn't actually connecting to anything yet. Verified
+  end-to-end on real hardware: scan populated real nearby SSIDs, and a
+  full "scan → select → save" round trip successfully reconfigured the
+  device's WiFi.
+
 ### Scope cuts (deliberate, not yet built)
 
-- No WiFi network scan dropdown in the setup form - manual SSID entry
-  only. A `GET /scan` via `WiFi.scanNetworks()` (like the reference's
-  `/wifiscan`) is a natural follow-up.
 - No password-protected AP - open network only, per the confirmed
   decision.
 - STA-mode web portal is intentionally minimal (status + forget-WiFi) -
