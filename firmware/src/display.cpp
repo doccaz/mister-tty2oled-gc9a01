@@ -171,18 +171,29 @@ void transitionReveal(uint8_t effect, uint16_t durationMs) {
       // web/src/serial.ts's ack timeout even before any compute time).
       const int fadeSteps = min(steps, 12);
       const uint16_t fadeStepMs = durationMs / fadeSteps;
-      static uint16_t blended[DISP_W * DISP_H];
+      // Blend one row at a time into a DISP_W-wide scratch buffer instead of
+      // a full 240x240 static buffer (that was a static ~112.5KB - the
+      // single biggest thing standing between this firmware and fitting
+      // WiFi's DRAM footprint, see CLAUDE.md WiFi planning notes). Wrapped
+      // in beginBatch()/pushRectBatched()/endBatch() so this stays one SPI
+      // transaction per step instead of 240.
+      static uint16_t blendedRow[DISP_W];
       for (int s = 1; s <= fadeSteps; s++) {
         uint32_t t0 = millis();
         int t256 = (256 * s) / fadeSteps; // fixed-point 0..256 blend factor
-        for (int i = 0; i < DISP_W * DISP_H; i++) {
-          uint16_t c = swap16(g_frame[i]); // unswap to compute, reswap to store
-          uint8_t r = ((c >> 11) & 0x1F) * t256 / 256;
-          uint8_t g = ((c >> 5) & 0x3F) * t256 / 256;
-          uint8_t b = (c & 0x1F) * t256 / 256;
-          blended[i] = swap16((r << 11) | (g << 5) | b);
+        gfx.beginBatch();
+        for (int y = 0; y < DISP_H; y++) {
+          const uint16_t *srcRow = &g_frame[y * DISP_W];
+          for (int x = 0; x < DISP_W; x++) {
+            uint16_t c = swap16(srcRow[x]); // unswap to compute, reswap to store
+            uint8_t r = ((c >> 11) & 0x1F) * t256 / 256;
+            uint8_t g = ((c >> 5) & 0x3F) * t256 / 256;
+            uint8_t b = (c & 0x1F) * t256 / 256;
+            blendedRow[x] = swap16((r << 11) | (g << 5) | b);
+          }
+          gfx.pushRectBatched(0, y, DISP_W, 1, blendedRow);
         }
-        gfx.pushRect(0, 0, DISP_W, DISP_H, blended);
+        gfx.endBatch();
         stepDelay(t0, fadeStepMs);
       }
       break;

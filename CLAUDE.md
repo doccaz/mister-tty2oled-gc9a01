@@ -479,6 +479,76 @@ sends with three *different* JPEGs showed all three transitions
 correctly, confirming the framebuffer-reveal design was working exactly
 as intended, not a bug.
 
+## WiFi/AP feature — feasibility confirmed, design not yet started (2026-08-13)
+
+User request: AP mode with an mDNS/avahi hostname (like the sibling
+`chromecast-esp32`/"KnobCast" project's `CastWebServer` pattern -
+`WiFi.softAP()`, `DNSServer` wildcard-redirect captive portal,
+`WebServer` on port 80, `MDNS.begin()`), plus: while in AP mode, pressing
+the existing GPIO9 wake button (see "GPIO9 wake button" above) shows a
+QR code on the GC9A01 for the AP's WiFi credentials instead of its normal
+screensaver-wake behavior.
+
+**Before any design work, RAM feasibility was measured on real hardware**
+(not assumed) - this project's own CMDCORC bring-up history (silent
+malloc failures, a heap-fragmented false-negative) made "does this even
+fit" the load-bearing question, not an implementation detail. A temporary
+build (`WiFi.h` + `WebServer.h` + `DNSServer.h` + `ESPmDNS.h`, reporting
+`ESP.getFreeHeap()`/`getMaxAllocHeap()` over the `Serial0` debug UART -
+same channel as `DBG_ENABLED`, see "Debug channel" in protocol.cpp)
+found two things:
+
+1. **As originally written, WiFi did not fit at all** - linking `WiFi.h`
+   into `env:esp32c3` overflowed the DRAM segment by ~39984 bytes before
+   a single byte of heap was even requested, i.e. static allocations
+   alone (the two 240x240 framebuffers plus everything else) left no
+   room for WiFi's own static/BSS footprint.
+2. **The fade effect's `blended[DISP_W*DISP_H]` static buffer
+   (`display.cpp`, ~112.5KB) was the single largest reclaimable chunk.**
+   It only ever existed to hold a full-frame per-step blend of `g_frame`
+   before pushing it - rewritten to blend one row at a time into a
+   `uint16_t blendedRow[DISP_W]` scratch buffer and push each row inside
+   one `beginBatch()/pushRectBatched()/endBatch()` span (same pattern
+   already used by the iris effect), functionally identical output, just
+   without the full-frame buffer. This alone dropped static RAM usage
+   from ~87% to **58.4%** (191248/327680 bytes, `env:esp32c3`) -
+   confirmed correct on real hardware (no seams/banding vs. the old
+   full-buffer version).
+
+With that fix in place, the full stack was measured end-to-end on real
+hardware, holding the AP up continuously while also exercising the
+existing serial protocol under load (a real `CMDCORC` JPEG transfer sent
+over USB-CDC while WiFi/AP/WebServer/DNSServer/mDNS were all running):
+
+| Stage | Free heap | Largest alloc block |
+|---|---|---|
+| Before `WiFi.mode(WIFI_AP)` | 79848–84216 | 57332–61428 |
+| After `WiFi.softAP()` | 40480–44848 | 21492–26612 |
+| After `WebServer.begin()` + `DNSServer.start()` + `MDNS.begin()` | 31680 | 13300 |
+| Steady-state, 10s later | 31940 (stable, no leak) | 13300 |
+| After a full `CMDCORC` transfer (6399-byte JPEG) with AP+server+mDNS all active | 31940 (unchanged) | 13300 |
+
+`readExact()` completed the 6399-byte transfer in 155ms with no
+slowdown, no dropped bytes, and no heap movement - the existing
+`CMDCORC` pipeline is unaffected by WiFi running concurrently.
+**Conclusion: WiFi/AP/mDNS/web-server is feasible on this hardware, but
+only after the fade-buffer fix above** - ~31.9KB free heap / ~13.3KB
+largest contiguous block is the working budget any new WiFi code has to
+live within. `colorBuf` (20000 bytes) and `legacyBuf` (8192 bytes) are
+already static, not heap, so they don't compete with this budget - new
+WiFi-side buffers (HTTP request bodies, QR code matrix, WiFi credential
+storage) should default to static/fixed-size for the same reason
+(`colorBuf`'s malloc-failure history above), not `malloc`/`new`.
+
+Design work for the actual feature (AP/STA state machine, config
+persistence - likely NVS/`Preferences` like `chromecast-esp32`'s
+`config.h` - web UI scope, mDNS hostname naming, AP password/open
+network choice, QR code library/rendering, and how GPIO9's existing
+wake-button role branches between "show QR" in AP mode vs. its current
+screensaver-wake role in normal operation) has **not started** - this
+section only establishes that the feature is possible and what it must
+fit inside.
+
 ## Planned: full-color marquee support (deferred)
 
 Current priority is **hardware bring-up** (firmware flashed + verified on
