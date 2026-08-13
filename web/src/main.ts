@@ -6,9 +6,22 @@ import { loadImportIndex, entryUrl, findAutoMatch, type ImportEntry } from "./im
 import { DISPLAY_PROFILES, DEFAULT_DISPLAY_PROFILE, findDisplayProfile, type DisplayProfile } from "./displays";
 import { DEFAULT_TRANSFORM_BY_SHAPE, type TransformMode } from "./transforms";
 import { EFFECTS, SPEED_PRESETS, DEFAULT_SPEED } from "./effects";
+import { COMMANDS, COMMAND_CATEGORIES, type CommandDef } from "./commands";
+
+const REPO_URL = "https://github.com/doccaz/mister-tty2oled-gc9a01";
+
+const ABOUT_LINKS = [
+  { title: "This project's source", desc: "GitHub", url: REPO_URL },
+  { title: "Original tty2oled", desc: "firmware/scripts this protocol is based on", url: "https://github.com/venice1200/MiSTer_tty2oled" },
+  { title: "WLED OLED usermod", desc: "onboard status OLED support was ported from this", url: "https://github.com/wled/WLED/pull/5475" },
+  { title: "tty2tft", desc: "sibling project for color TFT marquees, same community", url: "https://www.tty2tft.de" },
+];
 
 const app = document.getElementById("app")!;
 app.innerHTML = `
+  <a class="github-ribbon" href="${REPO_URL}" target="_blank" rel="noopener">
+    <span>Fork me on GitHub</span>
+  </a>
   <header>
     <h1>tty2oled marquee visualizer</h1>
     <label class="hint">display
@@ -17,6 +30,8 @@ app.innerHTML = `
       </select>
     </label>
     <button id="review-matches-btn">Review core matches</button>
+    <button id="command-console-btn">Command console</button>
+    <button id="about-btn">About</button>
     <span class="status-dot" id="status-dot"></span>
     <span id="status-text" class="hint">disconnected</span>
     <button id="connect-btn">Connect device</button>
@@ -95,6 +110,14 @@ connectBtn.addEventListener("click", async () => {
   openMatchReviewModal();
 });
 
+(document.getElementById("command-console-btn") as HTMLButtonElement).addEventListener("click", () => {
+  openCommandConsole();
+});
+
+(document.getElementById("about-btn") as HTMLButtonElement).addEventListener("click", () => {
+  openAboutModal();
+});
+
 // --- Library grid --------------------------------------------------------
 
 const libraryEl = document.getElementById("library")!;
@@ -125,7 +148,14 @@ function renderLibrary() {
       thumb.style.aspectRatio = `${currentProfile.width} / ${currentProfile.height}`;
       thumb.style.borderRadius = currentProfile.shape === "round" ? "50%" : "6px";
       const url = thumbUrl(core.id);
-      if (url) thumb.style.backgroundImage = `url(${url})`;
+      if (url) {
+        thumb.style.backgroundImage = `url(${url})`;
+      } else {
+        const missing = document.createElement("span");
+        missing.className = "thumb-missing";
+        missing.textContent = "(not found)";
+        thumb.appendChild(missing);
+      }
       const name = document.createElement("div");
       name.textContent = core.label;
       card.appendChild(thumb);
@@ -440,6 +470,205 @@ async function openMatchReviewModal() {
     close();
     statusText.textContent = `Saved ${count} matched core${count === 1 ? "" : "s"}.`;
   });
+}
+
+// --- Command console -------------------------------------------------------
+//
+// Documents and exercises every protocol command the firmware understands
+// (see commands.ts, kept in sync with firmware/src/protocol.cpp and
+// CLAUDE.md's "Wire protocol" section) - both the original tty2oled
+// grammar and the new commands added for this round display. Picture
+// commands (CMDCOR/CMDAPD/CMDCORC) are listed but not sendable here since
+// they need raw binary payloads; use the main gallery/editor for those.
+
+function openCommandConsole() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <div class="hint">Every command the firmware understands - see commands.ts / CLAUDE.md. Requires a connected device to send.</div>
+        <button id="console-close">Close</button>
+      </div>
+      <div class="command-list" id="command-list"></div>
+      <div class="command-log" id="command-log"></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const close = () => {
+    link.removeEventListener("message", onMessage);
+    link.removeEventListener("statechange", onStateChange);
+    overlay.remove();
+  };
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  (overlay.querySelector("#console-close") as HTMLButtonElement).addEventListener("click", close);
+
+  const log = overlay.querySelector("#command-log") as HTMLDivElement;
+  function appendLog(direction: "tx" | "rx", text: string) {
+    const line = document.createElement("div");
+    line.className = direction === "tx" ? "log-tx" : "log-rx";
+    line.textContent = (direction === "tx" ? "> " : "< ") + text;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  const onMessage = (e: Event) => appendLog("rx", (e as CustomEvent<string>).detail);
+  link.addEventListener("message", onMessage);
+
+  const list = overlay.querySelector("#command-list") as HTMLDivElement;
+  const sendButtons: HTMLButtonElement[] = [];
+
+  function onStateChange() {
+    const connected = link.state === "connected";
+    for (const btn of sendButtons) btn.disabled = !connected;
+  }
+  link.addEventListener("statechange", onStateChange);
+
+  list.innerHTML = "";
+  for (const category of COMMAND_CATEGORIES) {
+    const label = document.createElement("div");
+    label.className = "command-category-label";
+    label.textContent = category;
+    list.appendChild(label);
+
+    for (const def of COMMANDS.filter((c) => c.category === category)) {
+      list.appendChild(buildCommandRow(def, appendLog, sendButtons));
+    }
+  }
+  onStateChange();
+}
+
+function buildCommandRow(
+  def: CommandDef,
+  appendLog: (direction: "tx" | "rx", text: string) => void,
+  sendButtons: HTMLButtonElement[],
+): HTMLDivElement {
+  const row = document.createElement("div");
+  row.className = "command-row" + (def.sendable ? "" : " disabled");
+
+  const main = document.createElement("div");
+  main.className = "command-main";
+  main.innerHTML = `
+    <div class="command-syntax">${def.syntax}</div>
+    <div class="command-summary">${def.summary}${def.note ? " " + def.note : ""}</div>
+  `;
+  row.appendChild(main);
+
+  if (!def.sendable) return row;
+
+  const paramsEl = document.createElement("div");
+  paramsEl.className = "command-params";
+  const inputs: Record<string, HTMLInputElement | HTMLSelectElement> = {};
+  for (const p of def.params ?? []) {
+    const wrap = document.createElement("label");
+    let field: HTMLInputElement | HTMLSelectElement;
+    if (p.type === "select") {
+      const select = document.createElement("select");
+      for (const opt of p.options ?? []) {
+        const o = document.createElement("option");
+        o.value = opt.value;
+        o.textContent = opt.label;
+        if (opt.value === p.default) o.selected = true;
+        select.appendChild(o);
+      }
+      field = select;
+    } else {
+      const input = document.createElement("input");
+      input.type = p.type === "number" ? "number" : "text";
+      if (p.min !== undefined) input.min = String(p.min);
+      if (p.max !== undefined) input.max = String(p.max);
+      input.value = p.default;
+      field = input;
+    }
+    wrap.appendChild(document.createTextNode(p.label));
+    wrap.appendChild(field);
+    inputs[p.key] = field;
+    paramsEl.appendChild(wrap);
+  }
+  row.appendChild(paramsEl);
+
+  const sendBtn = document.createElement("button");
+  sendBtn.textContent = "Send";
+  sendBtn.addEventListener("click", async () => {
+    if (def.confirmMessage && !window.confirm(def.confirmMessage)) return;
+    const values: Record<string, string> = {};
+    for (const key of Object.keys(inputs)) values[key] = inputs[key].value;
+    const line = (def.build ?? (() => def.id))(values);
+    appendLog("tx", line);
+    sendBtn.disabled = true;
+    try {
+      await link.sendCommand(line);
+    } finally {
+      sendBtn.disabled = link.state !== "connected";
+    }
+  });
+  sendButtons.push(sendBtn);
+  row.appendChild(sendBtn);
+
+  return row;
+}
+
+// --- About -------------------------------------------------------------
+
+function openAboutModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal about-modal">
+      <div class="modal-header">
+        <div class="about-title">
+          <span class="about-title-main">tty2oled-gc9a01</span>
+          <span class="about-title-sub">marquee visualizer</span>
+        </div>
+        <button id="about-close">Close</button>
+      </div>
+      <div class="about-body">
+        <p class="about-lead">
+          A protocol-compatible re-implementation of the MiSTer FPGA community's
+          <strong>tty2oled</strong> marquee display, targeting an ESP32-C3-mini
+          + GC9A01 240×240 round SPI display (plus this board's onboard 0.42"
+          status OLED). This web app is its companion: browse and edit the
+          per-core marquee art library, then preview it live on the physical
+          display over WebSerial - no MiSTer required for editing.
+        </p>
+
+        <section class="about-section">
+          <h3>Architecture</h3>
+          <ul class="about-list">
+            <li><strong>Firmware</strong> — PlatformIO/Arduino on the ESP32-C3, speaking a superset of the original tty2oled serial protocol (see the Command console for the full grammar).</li>
+            <li><strong>This app</strong> — a Vite + TypeScript SPA: Canvas2D crop/pan/zoom editor, IndexedDB for per-core art, and a WebSerial link that mirrors the firmware's wire format exactly.</li>
+            <li><strong>Local marquee library</strong> — community packs converted from the original project's grayscale formats, browsable from the editor's "Browse local packs" button.</li>
+          </ul>
+        </section>
+
+        <section class="about-section">
+          <h3>Links</h3>
+          <ul class="about-links">
+            ${ABOUT_LINKS.map(
+              (l) => `
+              <li>
+                <a href="${l.url}" target="_blank" rel="noopener">
+                  <span class="about-link-title">${l.title}</span>
+                  <span class="about-link-desc">${l.desc}</span>
+                  <span class="about-link-url">${l.url}</span>
+                </a>
+              </li>`,
+            ).join("")}
+          </ul>
+        </section>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  (overlay.querySelector("#about-close") as HTMLButtonElement).addEventListener("click", close);
 }
 
 function selectCore(core: CoreDef) {

@@ -35,15 +35,16 @@ export interface DisplayProfile {
 
 export const DISPLAY_PROFILES: DisplayProfile[] = [
   { id: "gc9a01-240", label: "GC9A01 240×240 (round)", shape: "round", width: 240, height: 240, colorArt: true, legacyMono: false },
+  { id: "ssd1322-256x64", label: "SSD1322 256×64 (rect, legacy tty2oled)", shape: "rect", width: 256, height: 64, colorArt: false, legacyMono: true },
   { id: "rect-240x240", label: "Generic 240×240 (rect)", shape: "rect", width: 240, height: 240, colorArt: false, legacyMono: false },
   { id: "rect-320x240", label: "Generic 320×240 (rect, 4:3)", shape: "rect", width: 320, height: 240, colorArt: false, legacyMono: false },
-  { id: "ssd1322-256x64", label: "SSD1322 256×64 (rect, legacy tty2oled)", shape: "rect", width: 256, height: 64, colorArt: false, legacyMono: true },
 ];
 
-// Defaults to the legacy SSD1322 rect profile - matches the reference
-// project's actual hardware, so a freshly-loaded app previews the same
-// shape most existing tty2oled setups use, rather than the newer round one.
-export const DEFAULT_DISPLAY_PROFILE = DISPLAY_PROFILES.find((p) => p.id === "ssd1322-256x64")!;
+// Defaults to the round GC9A01 profile - this project's actual firmware
+// target (see CLAUDE.md). Previously defaulted to the legacy SSD1322 rect
+// profile to match most existing tty2oled setups; changed 2026-08-13 once
+// the round display was the one actually verified on real hardware.
+export const DEFAULT_DISPLAY_PROFILE = DISPLAY_PROFILES.find((p) => p.id === "gc9a01-240")!;
 
 export function findDisplayProfile(id: string): DisplayProfile {
   return DISPLAY_PROFILES.find((p) => p.id === id) ?? DEFAULT_DISPLAY_PROFILE;

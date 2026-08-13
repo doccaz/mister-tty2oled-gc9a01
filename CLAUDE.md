@@ -61,10 +61,12 @@ stay blank until assigned manually.
 ## Display profile & fit presets
 
 `web/src/displays.ts` defines selectable target displays (`DISPLAY_PROFILES`):
-round GC9A01 240×240, plus a few rectangular options (240×240, 320×240,
-and the legacy SSD1322 256×64 — **the default**, since it matches the
-reference project's actual hardware and is what most existing tty2oled
-setups use). The header's "display" dropdown is a **global** preview
+round GC9A01 240×240 — **the default** (2026-08-13; previously the legacy
+SSD1322 profile defaulted, to match most existing tty2oled setups, but
+the round display is this project's actual, real-hardware-verified
+firmware target) — plus a few rectangular options (240×240, 320×240, and
+the legacy SSD1322 256×64, matching the reference project's actual
+hardware). The header's "display" dropdown is a **global** preview
 setting — it reshapes the editor canvas, the library thumbnails, and the
 JPEG export resolution, but isn't stored per-core (a core's saved art is a
 single blob; switching profiles doesn't keep per-profile versions). Only
@@ -74,13 +76,18 @@ rect-display firmware variant.
 
 `web/src/transforms.ts` defines fit presets (`cover`, `contain`,
 `center-scale`) with a default per display **shape**
-(`DEFAULT_TRANSFORM_BY_SHAPE`): round defaults to `center-scale` at 91%
-(inset from the circular bezel so corners of a "cover"-fit image aren't
-clipped by the mask), rect defaults to plain `cover`. Presets are a
+(`DEFAULT_TRANSFORM_BY_SHAPE`): round defaults to `contain` (2026-08-13 -
+previously `center-scale` at 91%; changed so the whole image is visible,
+uncropped, on first load), rect defaults to plain `cover`. Presets are a
 one-shot starting point, applied on image load and on profile switch
 (`MarqueeEditor.setProfile`/`applyPreset`) - the user can still pan/zoom
 manually afterward via the editor's drag/scroll, and re-pick a preset any
 time from the "fit" control to reset.
+
+`DISPLAY_PROFILES` (`web/src/displays.ts`) lists round (GC9A01) first in
+the dropdown, then the legacy SSD1322 rect profile, then the generic rect
+profiles — `DEFAULT_DISPLAY_PROFILE` now matches (round/GC9A01), see
+above.
 
 ## Layout
 
@@ -423,6 +430,34 @@ npm run dev                 # open in Chrome or Edge (WebSerial required)
 Select a core, drop in an image, pan/zoom to fit the circular safe area,
 "Send to device" (or just edit — live preview streams automatically while
 connected), "Save to library" persists it locally (IndexedDB) for next time.
+
+### Command console
+
+The header's "Command console" button opens a modal (`openCommandConsole()`
+in `main.ts`) that documents and exercises every wire-protocol command the
+firmware understands - both the original tty2oled grammar and the new
+commands added for this round display. `web/src/commands.ts` is the
+catalog (kept in sync with `firmware/src/protocol.cpp`'s `dispatch()` and
+this file's "Wire protocol" section) - one `CommandDef` per command, with
+its syntax, a plain-English summary, and a typed param list the modal
+turns into input fields. Picture-transfer commands (`CMDCOR`/`CMDAPD`/
+`CMDCORC`) are listed as `sendable: false` with a note pointing at the
+main gallery/editor instead, since they need raw binary payloads a
+generic command-line console has no business constructing. `serial.ts`'s
+`SerialLink` gained a `"message"` event (any device output that isn't
+`ttyack;`/`ttyrdy;`, e.g. `CMDHWINF`'s reply) so the console's log panel
+can show raw device responses, not just sent commands.
+
+### About modal + GitHub ribbon
+
+The header's "About" button opens a short write-up of what the project
+is, its architecture, and links (with full URLs shown) to this repo, the
+original `venice1200/MiSTer_tty2oled`, the WLED OLED usermod the status
+display was ported from, and the sibling `tty2tft` project. A CSS-only
+diagonal "Fork me on GitHub" ribbon sits fixed in the page's bottom-right
+corner (`.github-ribbon` in `style.css`) - built from scratch rather than
+reusing the common SVG-icon ribbon snippet, to avoid pulling in art of
+uncertain provenance.
 
 ## Planned: full-color marquee support (deferred)
 
