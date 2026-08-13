@@ -1,5 +1,6 @@
 #include "protocol.h"
 #include "display.h"
+#include "oled_status.h"
 #include <Arduino.h>
 
 namespace {
@@ -28,6 +29,7 @@ uint8_t colorBuf[COLOR_BUF_MAX];
 String actCorename = "No Core loaded";
 int cDelay = 15;         // ms delay before ttyack;, mirrors original cDelay
 bool sendTTYACK = true;  // CMDSTTYACK toggle
+unsigned long lastActivityMs = 0; // millis() of last dispatched line, for oled_status.cpp
 
 // Debug channel: hardware UART0 (GPIO20/21, via an external USB-serial
 // adapter), completely independent of the native USB-CDC "Serial" object
@@ -114,7 +116,9 @@ void handleLegacyPicture(const String &cmd, int prefixLen) {
     effect = rest.substring(comma + 1).toInt();
   }
 
+  oled_status_suspend();
   size_t n = readFixed(legacyBuf, LEGACY_BUF_SIZE);
+  oled_status_resume();
   if (n == 2048) {
     display_draw_legacy_xbm(legacyBuf, effect < 0 ? 1 : (uint8_t)effect);
   } else if (n == 8192) {
@@ -142,7 +146,9 @@ void handleColorPicture(const String &cmd) {
   }
 
   DBG("calling readExact...\n");
+  oled_status_suspend();
   bool ok = readExact(colorBuf, (size_t)length);
+  oled_status_resume();
   DBG("readExact returned %d\n", ok);
   if (!ok) {
     return; // readExact() already showed+froze on the got/size mismatch
@@ -267,9 +273,18 @@ void protocol_process() {
   DBG("dispatch line len=%u\n", (unsigned)line.length());
 
   dispatch(line);
+  lastActivityMs = millis();
 
   if (sendTTYACK) {
     delay(cDelay);
     Serial.print("ttyack;");
   }
+}
+
+const String &protocol_get_corename() {
+  return actCorename;
+}
+
+unsigned long protocol_last_activity_ms() {
+  return lastActivityMs;
 }

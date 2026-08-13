@@ -95,6 +95,7 @@ mister-tty2oled-gc9a01/
 │       ├── pins.h         GPIO pin block — edit to match your board's wiring
 │       ├── gc9a01.h/.cpp  minimal direct-SPI GC9A01 driver (built on Arduino_GFX + plain SPIClass)
 │       ├── display.h/.cpp GC9A01 rendering (gc9a01.h + JPEGDEC)
+│       ├── oled_status.h/.cpp onboard 0.42" SSD1306 status display (I2C, separate from GC9A01)
 │       └── protocol.h/.cpp serial command parser/dispatcher
 └── web/           Vite + TypeScript SPA
     └── src/
@@ -146,14 +147,54 @@ for all display pins again (`PIN_LCD_SCLK/MOSI/CS/DC/RST/BL`), since the
 custom `gc9a01.h`/`.cpp` driver (see below) reads them directly, unlike
 the library-based approaches tried earlier that needed pins elsewhere.
 
-Verified working wiring (flashed and confirmed showing the startup screen
-on real ESP32-C3-mini + GC9A01 hardware, 2026-08-12): `SCLK=4, MOSI=6,
-CS=7, DC=5, RST=10, BL=3`. Avoid the C3's strapping pins (GPIO2, 8, 9) and
-whatever pins your board's onboard peripherals use (e.g. a small I2C OLED
-some ESP32-C3-mini variants have built in) if you change these. The native
-USB-Serial/JTAG peripheral is fixed to GPIO18/19 in hardware and used
-automatically by `Serial` — never wired manually, and what both a real
-MiSTer and the WebSerial web app talk to.
+Current wiring, **verified on real hardware 2026-08-13** (both the
+GC9A01 startup screen and the onboard OLED status dashboard confirmed
+showing correctly after physically moving the MOSI/DC jumpers and
+reflashing): `SCLK=4, MOSI=0, CS=7, DC=1, RST=10, BL=3`. MOSI/DC were
+moved off their original GPIO6/GPIO5 (verified working 2026-08-12) to
+free those pins for `PIN_OLED_SDA=5, PIN_OLED_SCL=6` — this board's
+onboard 0.42" SSD1306 status OLED (see "Onboard status OLED" below) uses
+those two as fixed I2C pins, not user-selectable, since it's built into
+the board. Moving these pins in `pins.h` only changes what the firmware
+expects; the physical jumper wires must be moved to match, or the GC9A01
+goes blank while still compiling and flashing cleanly. Avoid the C3's
+strapping pins (GPIO2, 8, 9),
+the FN4/FH4 module's in-package flash pins (GPIO11-17), and GPIO20/21
+(left free for the `Serial0` debug UART, see `protocol.cpp`'s
+`DBG_ENABLED`) if you change these further. The native USB-Serial/JTAG
+peripheral is fixed to GPIO18/19 in hardware and used automatically by
+`Serial` — never wired manually, and what both a real MiSTer and the
+WebSerial web app talk to.
+
+### Onboard status OLED
+
+`firmware/src/oled_status.h`/`.cpp` drives this board's built-in 0.42"
+SSD1306 (72×40 visible, addressed as a 128×64 controller with a
+`kOffX=28, kOffY=24` window into that RAM — values copied from a working
+WLED usermod for the same panel, not re-derived geometrically; a naive
+`(128-72)/2, (64-40)/2` centering clips on real hardware) over I2C on
+`PIN_OLED_SDA`/`PIN_OLED_SCL` (GPIO5/6). It's a **separate display from
+the GC9A01** — shows firmware/connection status (core name, RX activity,
+uptime), not marquee art. `oled_status_loop()` is rate-limited to ~100ms
+redraws and is called from `main.cpp`'s `loop()`. Because an I2C
+`sendBuffer()` (~20ms) is long enough to starve `Serial`'s RX queue drain
+if it runs mid-transfer (the exact class of bug that broke `CMDCORC`
+originally — see below), `protocol.cpp` wraps every blocking picture-byte
+read (`readFixed()`/`readExact()`, used by `handleLegacyPicture()` and
+`handleColorPicture()`) in `oled_status_suspend()`/`oled_status_resume()`,
+which skips redraws entirely for the duration. `protocol_get_corename()`
+and `protocol_last_activity_ms()` are the read-only accessors
+`oled_status.cpp` polls from `loop()` — cheap to call, never call them
+from inside the suspend-guarded transfer path. If `u8g2.begin()` fails
+(no OLED present on a given board), the module just stays permanently
+inactive rather than erroring.
+
+Ported from a WLED usermod the same author wrote for this exact
+ESP32-C3-mini + 0.42" OLED combo
+(https://github.com/wled/WLED/pull/5475) — reused for the I2C
+init/offset/font conventions, not the WLED-specific dashboard content
+(effect name/brightness graph) or its config/button/LED-heartbeat layer,
+none of which apply here.
 
 ### Why a custom GC9A01 driver, not a display library
 
@@ -195,20 +236,50 @@ needs from us.
 
 ### RAM headroom
 
-Build reports **~80.5% RAM usage** (263808 / 327680 bytes) on the C3,
-driven by two static 240×240×2-byte (112.5KB) full-frame buffers in
-`display.cpp` (`g_frame` and the fade effect's `blended` scratch buffer).
-Leaves ~64KB free for stack/heap at runtime - fine for JPEGDEC's own
-(small) working buffers and Serial I/O since there's no WiFi/BT stack
-running, but worth knowing before adding anything RAM-hungry later.
+Build reports **~87.1% RAM usage** (285248 / 327680 bytes, `env:esp32c3`
+with the onboard OLED) vs **~86.6%** (283808 / 327680 bytes,
+`env:esp32c3_nooled`, see "Build variants" above) — only ~1.4KB
+difference (2026-08-13, measured directly by building both envs).
+`Wire`/the ESP-IDF I2C driver is **not** what the OLED adds: it's already
+a hard transitive dependency of Adafruit GFX Library (`Adafruit_GFX.h`
+includes `Adafruit_BusIO`'s `Adafruit_I2CDevice.h`, which requires
+`Wire.h` to even compile `display.cpp`/`gc9a01.cpp`) — confirmed by
+trying `lib_ignore = Wire` in `env:esp32c3_nooled`, which broke the build
+with `fatal error: Wire.h: No such file or directory` from
+`Adafruit_I2CDevice.h`. So Wire's cost was already baked into the
+firmware before this session's OLED work; only U8g2 itself (excluded
+from `env:esp32c3_nooled`'s `lib_deps`) plus a couple of small globals
+account for the real difference. Both static 240×240×2-byte (112.5KB)
+full-frame buffers in `display.cpp` (`g_frame` and the fade effect's
+`blended` scratch buffer) remain the dominant cost either way. Leaves
+**~42-44KB** free for stack/heap at runtime in both variants — fits the
+32KB `ARDUINO_LOOP_STACK_SIZE` plus Serial's 4KB/2KB RX/TX queues plus
+JPEGDEC's own small working buffers, but this has **not yet been
+re-tested on hardware** with a full `CMDCORC` transfer under either
+variant — do that before trusting it, since this exact class of problem
+(silent allocation failure under tight/fragmented heap) is what caused
+the original CMDCORC bring-up bugs.
 
 ## Build & flash
 
+The same ESP32-C3-mini board is sold both with and without the built-in
+0.42" status OLED, so `firmware/platformio.ini` has two build variants
+controlled by the `HAS_ONBOARD_OLED` build flag — GC9A01 pins and
+behavior are identical in both, only the status OLED (and its U8g2
+library dependency) is compiled in or out (see "Onboard status OLED"
+above):
+
 ```bash
 cd firmware
-pio run --target upload
+pio run -e esp32c3 --target upload           # default: includes the onboard OLED
+pio run -e esp32c3_nooled --target upload    # board variant without the OLED
 pio device monitor          # 115200 baud, watch for "ttyrdy;"
 ```
+
+Both variants verified on real hardware 2026-08-13: `esp32c3` shows the
+status dashboard on the onboard OLED, `esp32c3_nooled` leaves it dark
+(and off entirely — `Wire.begin()`/`u8g2.begin()` are never called) while
+the GC9A01 behaves identically either way.
 
 ## Web app
 
@@ -276,9 +347,18 @@ to pull real color art from - that choice was explicitly not made yet.
   are included yet — the web app's WebSerial previewer doesn't need a
   MiSTer at all. Natural next step once firmware/web app are validated on
   real hardware.
-- Pin defaults in `pins.h` (`SCLK=4, MOSI=6, CS=7, DC=5, RST=10, BL=3`)
-  are **verified on real hardware** - flashed and confirmed showing the
-  "tty2oled / GC9A01" startup screen (2026-08-12).
+- Pin defaults in `pins.h` (`SCLK=4, MOSI=0, CS=7, DC=1, RST=10, BL=3`,
+  plus `PIN_OLED_SDA=5, PIN_OLED_SCL=6`) are **verified on real hardware**
+  (2026-08-13): GC9A01 shows its startup screen and the onboard OLED
+  shows the "tty2oled" status dashboard, both after physically moving the
+  MOSI/DC jumpers from their original GPIO6/GPIO5 and reflashing.
+- Onboard status OLED (`oled_status.h`/`.cpp`) is confirmed showing the
+  live dashboard on real hardware (2026-08-13). Not yet exercised: its
+  interaction with an in-flight `CMDCORC`/legacy-picture transfer (the
+  `oled_status_suspend()`/`resume()` guard around `readFixed()`/
+  `readExact()` is untested under load) — do a full `CMDCORC` transfer
+  next and confirm it still completes cleanly with the OLED active, given
+  the reduced RAM headroom (see "RAM headroom" above).
 - **`CMDCORC` JPEG rendering is now verified end-to-end on real hardware**
   (2026-08-12): a full 10352-byte JPEG transferred, decoded, and rendered
   with the iris and fade transition effects. Legacy `CMDCOR`/`CMDAPD`
