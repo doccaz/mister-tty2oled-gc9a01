@@ -1,0 +1,10 @@
+firmware/.pio/
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo
+.DS_Store
+
+# Generated from third-party fan-made marquee packs in reference/Pictures/
+# (see tools/build_library.sh) - not redistributed, regenerate locally.
+library/converted/
+web/public/library/
