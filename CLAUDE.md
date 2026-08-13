@@ -161,13 +161,18 @@ hardware (see `protocol.cpp`'s `dispatch()`):
   **parses the reference's exact grammar and range clamps** (mode 0-255,
   interval 5-600s, logotime 20-600s) so a real `tty2oled.sh` never
   errors, but only implements simple blank-after-idle (`mode>0` ⇒
-  enabled, blank via `display_off()` after `interval` seconds of
-  `protocol_last_activity_ms()` idle, wake via `redisplayCurrent()` on
-  the next command) — **not** the reference's animated multi-screen/
-  starfield/toaster screensaver system. `logotime` is parsed for grammar
-  compatibility but intentionally unused. This is a deliberate scope cut,
-  not an oversight — see `protocol.cpp`'s `CMDSAVER`/`CMDSWSAVER`
-  handlers for the exact divergence.
+  enabled, blank both displays after `interval` seconds idle, wake and
+  restore both on the next command or GPIO9 press — see "GPIO9 wake
+  button" below for the idle-timer details) — **not** the reference's
+  animated multi-screen/starfield/toaster screensaver system. `logotime`
+  is parsed for grammar compatibility but intentionally unused. This is a
+  deliberate scope cut, not an oversight — see `protocol.cpp`'s
+  `CMDSAVER`/`CMDSWSAVER` handlers for the exact divergence. Blanks the
+  onboard status OLED too (`oled_status_off()`/`_on()`), added
+  2026-08-13 once a real burn-in concern was raised for its always-on
+  static dashboard — an OLED is emissive, so unlike the GC9A01's
+  backlight-only "off", blanking it by content actually stops pixel
+  current, not just dims it.
 
 While implementing these, also fixed a latent bug in the existing
 `CMDCOR`/`CMDAPD` legacy path: `effect < 0` was silently mapped to a
@@ -265,6 +270,16 @@ from inside the suspend-guarded transfer path. If `u8g2.begin()` fails
 (no OLED present on a given board), the module just stays permanently
 inactive rather than erroring.
 
+`oled_status_off()`/`_on()` (added 2026-08-13, driven by the same
+`CMDSAVER` idle timer as the GC9A01's own screensaver - see "GPIO9 wake
+button") blank the dashboard by content (`clearBuffer()`/`sendBuffer()`),
+**not** u8g2's `setPowerSave()` - that API is known from firsthand
+experience porting the WLED usermod below to hang this exact SSD1306
+panel, requiring a full re-init to recover, not just a mode switch. An
+always-on static dashboard is exactly the kind of content that burns in
+on a real (emissive) OLED over time, so blanking it isn't optional
+long-term the way it might be for an LCD.
+
 Ported from a WLED usermod the same author wrote for this exact
 ESP32-C3-mini + 0.42" OLED combo
 (https://github.com/wled/WLED/pull/5475) — reused for the I2C
@@ -307,7 +322,10 @@ button press isn't a received command, so touching the shared timestamp
 would make that indicator lie. `protocol_process()` keeps both in sync on
 every dispatched line; only the button touches `lastWakeMs` alone.
 Verified end-to-end on real hardware 2026-08-13: screensaver blanks after
-idle, GPIO9 press wakes it and restores the last picture.
+idle, GPIO9 press wakes it and restores the last picture. Since
+`lastWakeMs` also drives the onboard OLED's blank/wake (see "Onboard
+status OLED" and `CMDSAVER` above), the same button press wakes both
+displays together - also confirmed on real hardware.
 
 ### Why a custom GC9A01 driver, not a display library
 

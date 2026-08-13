@@ -7,7 +7,7 @@
 //
 // The same ESP32-C3-mini board ships both with and without this OLED, so
 // support is compiled in/out via the HAS_ONBOARD_OLED build flag (see
-// platformio.ini's env:esp32c3 vs env:esp32c3_nooled). All four functions
+// platformio.ini's env:esp32c3 vs env:esp32c3_nooled). All functions
 // below are always declared and safe to call unconditionally from
 // main.cpp/protocol.cpp; when HAS_ONBOARD_OLED=0 they compile to no-ops.
 
@@ -15,7 +15,8 @@ void oled_status_init();
 
 // Call every loop() iteration. Non-blocking, internally rate-limited
 // (redraws at most every ~100ms) and skips entirely while
-// oled_status_suspend() is in effect.
+// oled_status_suspend() is in effect or while blanked (see
+// oled_status_off()).
 void oled_status_loop();
 
 // Must be held for the duration of any serial-critical section (JPEG/XBM/
@@ -24,3 +25,12 @@ void oled_status_loop();
 // Nest-safe via a counter, not a bool.
 void oled_status_suspend();
 void oled_status_resume();
+
+// Screensaver blank/wake, driven by protocol.cpp's CMDSAVER idle timer -
+// an always-on static dashboard is exactly the kind of content that burns
+// in on a real OLED over time. Blanks/restores by content
+// (clearBuffer()/redraw), not u8g2's setPowerSave(): that API is known to
+// hang this exact SSD1306 panel without a full re-init (found the hard
+// way porting the WLED usermod this module is based on - see CLAUDE.md).
+void oled_status_off();
+void oled_status_on();
