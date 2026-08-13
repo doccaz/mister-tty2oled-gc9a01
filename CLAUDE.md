@@ -479,7 +479,7 @@ sends with three *different* JPEGs showed all three transitions
 correctly, confirming the framebuffer-reveal design was working exactly
 as intended, not a bug.
 
-## WiFi/AP feature — feasibility confirmed, design not yet started (2026-08-13)
+## WiFi/AP feature — implemented and verified on real hardware (2026-08-13)
 
 User request: AP mode with an mDNS/avahi hostname (like the sibling
 `chromecast-esp32`/"KnobCast" project's `CastWebServer` pattern -
@@ -540,14 +540,136 @@ WiFi-side buffers (HTTP request bodies, QR code matrix, WiFi credential
 storage) should default to static/fixed-size for the same reason
 (`colorBuf`'s malloc-failure history above), not `malloc`/`new`.
 
-Design work for the actual feature (AP/STA state machine, config
-persistence - likely NVS/`Preferences` like `chromecast-esp32`'s
-`config.h` - web UI scope, mDNS hostname naming, AP password/open
-network choice, QR code library/rendering, and how GPIO9's existing
-wake-button role branches between "show QR" in AP mode vs. its current
-screensaver-wake role in normal operation) has **not started** - this
-section only establishes that the feature is possible and what it must
-fit inside.
+With that budget confirmed, the feature itself was built and verified
+end-to-end on real hardware. Design decisions confirmed with the user
+before implementation: **AP network is open** (no password, matching
+`chromecast-esp32`'s `WiFi.softAP(ssid)`), **mDNS hostname is
+MAC-suffixed** (`tty2oled-XXXX.local`, same convention as the AP SSID -
+not a fixed shared name), and **GPIO9 fully splits by mode** (WiFi-QR
+toggle in AP mode, existing screensaver-wake in normal operation, no new
+hardware).
+
+### New files
+
+- `firmware/src/wifi_config.h` - `WifiConfigStore`/`WifiConfig`, NVS
+  namespace `"tty2oled"` (`Preferences`), directly modeled on
+  `chromecast-esp32/src/config.h`'s `ConfigStore` but trimmed to just
+  `wifiSsid`/`wifiPass`/`configured` - no device-control state, that
+  already lives in `protocol.cpp`/`display.cpp`.
+- `firmware/src/wifi_manager.h`/`.cpp` - `WifiState` state machine
+  (`INIT`/`AP_MODE`/`CONNECTING`/`CONNECTED`), directly modeled on
+  `chromecast-esp32/src/main.cpp`'s `AppState` handling. No saved config
+  → `AP_MODE`; saved config → `CONNECTING` with a 20s timeout (same
+  constant as the reference) falling back to `AP_MODE` on failure;
+  success → `CONNECTED`, which starts `MDNS.begin()` +
+  `MDNS.addService("http","tcp",80)` and the web portal.
+  `wifi_manager_is_ap_mode()` is protocol.cpp/display.cpp's only real
+  coupling point to this module.
+- `firmware/src/web_portal.h`/`.cpp` - `WebPortal` class (`WebServer(80)`
+  + `DNSServer`), directly modeled on `chromecast-esp32/src/web_server.h`'s
+  `CastWebServer` but trimmed to WiFi bootstrap only (no device-control
+  routes): `GET /` (setup form in AP mode, status+forget page once
+  connected), `POST /save` (writes config, `ESP.restart()`), `POST
+  /reset` (clears config, `ESP.restart()`), `GET /status` (small
+  hand-built JSON, no ArduinoJson dependency needed). HTML is an embedded
+  `PROGMEM` C string, same "no LittleFS/SPIFFS" approach as the
+  reference's `_handleRoot()`.
+- `ricmoo/QRCode` (`lib_deps`) - small pure-C QR encoder, no dynamic
+  allocation (caller-supplied fixed buffer via `qrcode_getBufferSize()`),
+  used only for the AP-mode WiFi-join QR.
+
+### Display additions (`display.cpp`)
+
+`display_show_ap_mode(ssid, ip)`, `display_show_connecting_wifi(ssid)`,
+`display_show_wifi_connected(ssid, ip)`, and `display_toggle_wifi_qr()`
+(no args - remembers the AP ssid/ip set by `display_show_ap_mode()`
+internally via `g_apSsid`/`g_apIp`/`g_qrShown`, so `protocol.cpp` doesn't
+need to know them). The QR renderer (`drawWifiQrScreen()`, anonymous
+namespace) builds the `WIFI:T:nopass;S:<ssid>;;` payload, encodes it at a
+fixed version 4/ECC LOW, and reuses `g_frame` as scratch (safe to clobber
+- AP mode never has a decoded CMDCORC JPEG on screen at the same time) so
+no extra static buffer is needed; the whole QR is pushed in **one**
+`pushRect()` call, not one `fillRect()`/SPI-transaction per module -
+matching the "batch, don't do per-call transactions" lesson from the
+iris/wipe stall fix earlier in this doc.
+
+### `protocol.cpp` changes
+
+`protocol_button_check()` gained real press-edge detection (a `static
+bool wasPressed`) on top of its existing level-based `lastWakeMs` touch -
+the QR toggle needs a single flip per press, not a re-trigger on every
+loop() tick the button stays held. `protocol_saver_check()` now returns
+early when `wifi_manager_is_ap_mode()` - no idle-blank during WiFi setup,
+so the AP-status/QR screens stay up until the button is pressed or WiFi
+gets configured, instead of a second idle timer fighting the QR toggle.
+
+### Two real bugs found only by testing on actual hardware (2026-08-13)
+
+Both exactly the kind of thing this project's CLAUDE.md keeps emphasizing
+- looked correct in review, only broke on real hardware:
+
+1. **QR square clipped by the round bezel.** The QR's pixel size was
+   sized off a naive "200px safe area" constant with no relationship to
+   the display actually being round - a square that size, centered, put
+   its corners (exactly where the QR's finder patterns live) past the
+   physical circular glass, visibly cropping them. Fixed by sizing the
+   square so it's fully inscribed in a circle of conservative radius
+   100px (`side <= R*sqrt(2)`, so `qrPx = floor(100*1.4142 / qrcode.size)
+   * qrcode.size`) and removing a vertical offset that had been added to
+   leave room for SSID text below - that offset pushed the square
+   further off-center and made the clipping worse on one edge. Confirmed
+   fixed on real hardware: a phone camera scanned the QR and prompted to
+   join the open network correctly.
+2. **`enterConnected()` never redrew the display.** On the first
+   end-to-end STA-connect test, the physical screen stayed on
+   "Connecting to <ssid>" indefinitely even though the device had
+   actually connected in well under the 20s timeout - `WiFi.status()`
+   correctly returned `WL_CONNECTED`, mDNS registered
+   (`tty2oled-XXXX.local` resolved via `avahi-resolve`/`avahi-browse`),
+   and `/status` served correctly over the new STA IP, all confirmed
+   independently of the (stale) screen. The bug was simply that
+   `enterConnected()` started mDNS/the portal but never called any
+   `display_show_*` function, so the last screen drawn (`enterConnecting()`'s
+   "Connecting to...") never changed. Fixed by adding
+   `display_show_wifi_connected(ssid, ip)` and calling it from
+   `enterConnected()`. This is a reminder that "the network side works"
+   and "the screen reflects it" are two separate claims - verify both,
+   not just the one that's easier to check from a laptop.
+
+### Verified end-to-end on real hardware (2026-08-13)
+
+- Cold boot with no saved WiFi config → device broadcasts
+  `tty2oled-XXXX` (open network), captive-portal setup page loads
+  automatically for any path (`onNotFound` → root), `/status` returns
+  correct AP-mode JSON.
+- WiFi credentials submitted through the real setup form (not curl, to
+  keep the password out of any debug channel) → device restarts, joins
+  the target network, `tty2oled-XXXX.local` resolves via mDNS
+  (`avahi-resolve`/`avahi-browse` both confirmed the `_http._tcp`
+  service advertisement), `/status` and `/` both serve correctly over
+  both the direct IP and the mDNS hostname.
+- GPIO9 press in AP mode → QR code renders fully inside the round bezel
+  (post-fix), a real phone camera scans it and prompts to join the open
+  AP network; second press reverts to the AP-status screen.
+- Both `env:esp32c3` and `env:esp32c3_nooled` build clean with the
+  feature included, at ~59.2-59.7% static RAM - comfortably inside the
+  ~58.4% post-fade-fix baseline plus the feature's own footprint, nowhere
+  near the pre-fade-fix 87% danger zone.
+
+### Scope cuts (deliberate, not yet built)
+
+- No WiFi network scan dropdown in the setup form - manual SSID entry
+  only. A `GET /scan` via `WiFi.scanNetworks()` (like the reference's
+  `/wifiscan`) is a natural follow-up.
+- No password-protected AP - open network only, per the confirmed
+  decision.
+- STA-mode web portal is intentionally minimal (status + forget-WiFi) -
+  this project's actual marquee control already lives in the WebSerial
+  `web/` app; the new portal's only job is WiFi bootstrapping.
+- `wifi_manager_status_line()` exists (meant for `oled_status.cpp`'s
+  dashboard) but isn't wired in yet - the onboard OLED's 72x40 dashboard
+  is already at 4 lines filling all ~40px of usable height, and adding a
+  5th would mean redesigning the layout, not just appending a line.
 
 ## Planned: full-color marquee support (deferred)
 
