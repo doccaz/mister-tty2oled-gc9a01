@@ -1,7 +1,9 @@
 #include "wifi_manager.h"
 #include "wifi_config.h"
+#include "mqtt_config.h"
 #include "web_portal.h"
 #include "ws_protocol.h"
+#include "mqtt_client.h"
 #include "display.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
@@ -11,6 +13,11 @@ namespace {
 enum class WifiState { INIT, AP_MODE, CONNECTING, CONNECTED };
 
 WifiConfigStore configStore;
+// Separate from mqtt_client.cpp's own MqttConfigStore instance - this one
+// only backs the portal's settings form. Both read the same NVS
+// namespace; handleMqttSave() restarts the device to apply changes
+// (see its comment), so the two never need to stay in sync live.
+MqttConfigStore mqttConfigStore;
 WebPortal portal;
 WifiState state = WifiState::INIT;
 String deviceName; // "tty2oled-XXXX"
@@ -65,6 +72,8 @@ void enterConnected() {
   MDNS.addService("ws", "tcp", 81);
 
   portal.begin(&configStore, false);
+  mqttConfigStore.begin();
+  portal.setMqttConfig(&mqttConfigStore);
   portalStarted = true;
 
   // Real-hardware finding (2026-08-13): the connect itself succeeded well
@@ -78,6 +87,10 @@ void enterConnected() {
   // WS command protocol is STA-mode only (see CLAUDE.md "Wire protocol
   // over WiFi") - AP mode's only job is WiFi bootstrapping.
   ws_protocol_init();
+
+  // Same STA-only scope cut - MQTT notifications only matter once on the
+  // real network. No-ops internally if not configured/enabled.
+  mqtt_client_init();
 
   state = WifiState::CONNECTED;
   stateEnteredMs = millis();

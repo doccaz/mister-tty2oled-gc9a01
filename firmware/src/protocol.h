@@ -31,22 +31,40 @@ void protocol_dispatch_line(const String &cmd);
 // active WiFi client.
 void protocol_note_activity();
 
-// Shared picture-transfer state for ws_protocol.cpp's chunked CMDCORC-
-// equivalent (see CLAUDE.md "Wire protocol over WiFi"). Binary frames are
-// capped small by the WS protocol design itself, appended into the same
-// static colorBuf the serial CMDCORC path already uses - so this is state
-// tracking, not a second buffer. protocol_ws_xfer_begin() rejects
-// (returns false) an oversized totalLen or a transfer already in
-// progress; handleColorPicture()/handleLegacyPicture() (serial) check
-// protocol_ws_xfer_in_progress() before touching colorBuf/legacyBuf
-// themselves, so the two transports can't race on the same buffer.
+// Shared picture-buffer claim, guarding colorBuf against three possible
+// writers: the serial CMDCORC path (handleColorPicture(), a single
+// blocking call), ws_protocol.cpp's chunked CMDCORC-equivalent (frames
+// arrive across multiple loop() iterations), and mqtt_client.cpp's
+// image-by-URL fetch (an HTTPClient stream, also spanning multiple
+// loop() iterations). Despite the "ws_xfer" name (kept from when this
+// only had two callers, see CLAUDE.md "Wire protocol over WiFi" - not
+// worth renaming across every call site for no functional change), any
+// of the three claims the same flag before touching colorBuf and
+// releases it when done; protocol_ws_xfer_begin() rejects (returns
+// false) an oversized totalLen or a claim already held, so the three
+// writers can't race the same buffer no matter which pair overlaps.
 bool protocol_ws_xfer_begin(const String &name, uint8_t effect,
                              uint16_t durationMs, size_t totalLen);
 bool protocol_ws_xfer_append(const uint8_t *data, size_t len);
 bool protocol_ws_xfer_complete(); // true once all totalLen bytes have arrived
 void protocol_ws_xfer_finish();   // draws the completed transfer, clears state
+// Same completion as protocol_ws_xfer_finish(), but draws via
+// display_draw_jpeg_transient() and does NOT update lastPictureKind/
+// actCorename - for mqtt_client.cpp's image notifications, which must
+// leave "what to redisplay when the notification reverts" untouched
+// (see CLAUDE.md's MQTT notifications section for why - this is the
+// fix for a real bug found in testing where an image notification never
+// reverted, because it had overwritten the very state it should have
+// reverted back to).
+void protocol_ws_xfer_finish_transient();
 void protocol_ws_xfer_abort();
 bool protocol_ws_xfer_in_progress();
+
+// Redraws whatever was last shown (picture or corename text) - exposed
+// for mqtt_client.cpp's notification-revert timer, which needs the same
+// "restore previous content" behavior protocol_saver_check() already
+// uses internally for the screensaver wake path.
+void protocol_redisplay_current(uint8_t effect);
 
 // Read-only status accessors for oled_status.cpp. Cheap to call from
 // loop() - do not call from inside protocol_process()'s dispatch/transfer

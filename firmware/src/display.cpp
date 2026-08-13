@@ -57,6 +57,46 @@ inline uint16_t swap16(uint16_t v) {
   return (v >> 8) | (v << 8);
 }
 
+// Pushes decoded JPEG blocks straight to the physical display instead of
+// writing into g_frame - used by display_draw_jpeg_transient() for MQTT
+// notification images, which must NOT become the new "last shown
+// picture" g_frame/lastPictureKind track (see CLAUDE.md's MQTT
+// notifications section: an image notification's whole point is to
+// revert to whatever marquee art was showing before it, which is only
+// possible if that art's own g_frame content was never overwritten).
+//
+// One pushRect() per JPEG block (its own transaction), not
+// beginBatch()/pushRectBatched()/endBatch() wrapping the whole decode()
+// call - found by testing on real hardware that holding an SPI
+// transaction open across JPEGDEC's own internal per-block decode
+// compute time (not just the pushes) hung the device. Every other
+// batched-push case in this file only wraps a loop we fully control
+// (fade/iris), never a third-party library's own callback-driven
+// timing - this is the one place that pattern doesn't apply. Still
+// avoids the old per-ROW transaction-per-call cost (see CLAUDE.md's
+// "per-row transaction stall" section): one call per whole MCU block in
+// the common (unclipped) case, only falling back to per-row for a
+// block that's partially off-screen.
+int jpegDrawCallbackTransient(JPEGDRAW *pDraw) {
+  int x0 = pDraw->x, y0 = pDraw->y, w = pDraw->iWidth, h = pDraw->iHeight;
+  if (x0 >= 0 && y0 >= 0 && x0 + w <= DISP_W && y0 + h <= DISP_H) {
+    gfx.pushRect(x0, y0, w, h, pDraw->pPixels, w);
+    return 1;
+  }
+  for (int row = 0; row < h; row++) {
+    int y = y0 + row;
+    if (y < 0 || y >= DISP_H) continue;
+    int rowLen = w;
+    int rx0 = x0;
+    if (rx0 < 0) rowLen += rx0, rx0 = 0; // clip left overhang
+    if (rx0 + rowLen > DISP_W) rowLen = DISP_W - rx0; // clip right overhang
+    if (rowLen <= 0) continue;
+    const uint16_t *rowPixels = &pDraw->pPixels[row * w + (rx0 - x0)];
+    gfx.pushRect(rx0, y, rowLen, 1, rowPixels);
+  }
+  return 1;
+}
+
 int jpegDrawCallback(JPEGDRAW *pDraw) {
   for (int row = 0; row < pDraw->iHeight; row++) {
     int y = pDraw->y + row;
@@ -331,6 +371,47 @@ void display_show_error(const String &msg) {
   gfx.print(msg);
 }
 
+void display_show_notification_text(const String &text) {
+  // A banner drawn OVER whatever's already on screen, not a full clear -
+  // this is a transient overlay, the caller reverts to prior content
+  // afterward (see mqtt_client.h). Filled via beginBatch()/
+  // pushRectBatched() row-by-row rather than Adafruit_GFX's default
+  // fillRect() (which falls back to one drawPixel()/SPI-transaction per
+  // pixel on this driver, since GC9A01Display doesn't override it) -
+  // 240x60px of individual-pixel SPI transactions is exactly the kind of
+  // per-call transaction cost that stalled the iris/wipe effects before
+  // they were batched (see CLAUDE.md's "per-row transaction stall"
+  // section).
+  constexpr int16_t bannerH = 64;
+  const int16_t bannerY = DISP_CY - bannerH / 2;
+
+  static uint16_t rowBuf[DISP_W];
+  for (int i = 0; i < DISP_W; i++) rowBuf[i] = 0x0000; // black, byte-swap invariant
+  gfx.beginBatch();
+  for (int16_t y = 0; y < bannerH; y++) {
+    gfx.pushRectBatched(0, bannerY + y, DISP_W, 1, rowBuf);
+  }
+  gfx.endBatch();
+
+  gfx.setTextColor(0xFFFF);
+  gfx.setTextSize(2);
+  int16_t x1, y1;
+  uint16_t w, h;
+
+  // Single truncated line, no word wrap (v1 scope cut) - keep shortening
+  // with an ellipsis until it fits the banner's safe width.
+  String shown = text;
+  gfx.getTextBounds(shown, 0, 0, &x1, &y1, &w, &h);
+  while (w > DISP_W - 30 && shown.length() > 1) {
+    shown = shown.substring(0, shown.length() - 1);
+    gfx.getTextBounds(shown + "...", 0, 0, &x1, &y1, &w, &h);
+  }
+  if (shown.length() < text.length()) shown += "...";
+  gfx.getTextBounds(shown, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY - h / 2);
+  gfx.print(shown);
+}
+
 void display_draw_text(int16_t x, int16_t y, uint8_t fontSize, const String &text) {
   gfx.setTextColor(0xFFFF);
   gfx.setTextSize(fontSize == 0 ? 1 : fontSize);
@@ -387,6 +468,20 @@ void display_draw_jpeg(const uint8_t *buf, size_t len, uint8_t effect, uint16_t 
   jpeg.close();
 
   transitionReveal(effect, durationMs);
+}
+
+void display_draw_jpeg_transient(const uint8_t *buf, size_t len) {
+  if (!jpeg.openRAM(const_cast<uint8_t *>(buf), len, jpegDrawCallbackTransient)) {
+    display_show_error("JPEG decode failed");
+    return;
+  }
+  int imgW = jpeg.getWidth();
+  int imgH = jpeg.getHeight();
+  jpeg.setPixelType(RGB565_BIG_ENDIAN);
+  int offX = (DISP_W - imgW) / 2;
+  int offY = (DISP_H - imgH) / 2;
+  jpeg.decode(offX, offY, 0);
+  jpeg.close();
 }
 
 void display_replay_jpeg(uint8_t effect, uint16_t durationMs) {
