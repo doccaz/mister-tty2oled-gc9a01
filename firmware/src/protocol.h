@@ -24,3 +24,9 @@ unsigned long protocol_last_activity_ms(); // millis() timestamp of last dispatc
 // after protocol_process(), never from inside a transfer path. No-op
 // when the screensaver is disabled (the default).
 void protocol_saver_check();
+
+// Polls the GPIO9 wake button (see pins.h's PIN_WAKE_BTN) - call every
+// loop() iteration, before protocol_saver_check() so a press this
+// iteration can unblank in the same iteration. Only affects the
+// screensaver's idle timer, not oled_status.cpp's serial-RX indicator.
+void protocol_button_check();

@@ -1,6 +1,8 @@
 #include "protocol.h"
 #include "display.h"
 #include "oled_status.h"
+#include "pins.h"
+#include "version.h"
 #include <Arduino.h>
 #include <cstring>
 
@@ -30,9 +32,14 @@ uint8_t colorBuf[COLOR_BUF_MAX];
 String actCorename = "No Core loaded";
 int cDelay = 15;         // ms delay before ttyack;, mirrors original cDelay
 bool sendTTYACK = true;  // CMDSTTYACK toggle
-unsigned long lastActivityMs = 0; // millis() of last dispatched line, for oled_status.cpp
+unsigned long lastActivityMs = 0; // millis() of last dispatched line - serial RX activity only, for oled_status.cpp's "RX" indicator
 
-constexpr const char *FW_VERSION = "0.1.0";
+// Idle-timer input for the screensaver specifically - unlike
+// lastActivityMs, this is also touched by the GPIO9 wake button, so
+// holding/pressing it counts as activity without making oled_status.cpp's
+// serial-RX indicator lie about receiving a command that never arrived.
+unsigned long lastWakeMs = 0;
+
 constexpr uint16_t DEFAULT_TRANSITION_MS = 600; // CMDSPIC has no duration param in the wire format
 
 // Tracks which buffer/kind the last successfully-drawn picture came from,
@@ -409,6 +416,13 @@ void protocol_init() {
   Serial.setTimeout(500);
   delay(cDelay);
   Serial.print("ttyrdy;");
+
+  // GPIO9 is the C3's onboard "BOOT" pushbutton and a strapping pin, but
+  // strapping only matters at reset (pulled low = download mode) - safe
+  // to read as a plain input once running. Repurposed here as a
+  // screensaver wake button; INPUT_PULLUP is a no-op safety net since the
+  // board already pulls it up for the strapping function to work at all.
+  pinMode(PIN_WAKE_BTN, INPUT_PULLUP);
 }
 
 void protocol_process() {
@@ -421,10 +435,20 @@ void protocol_process() {
 
   dispatch(line);
   lastActivityMs = millis();
+  lastWakeMs = lastActivityMs;
 
   if (sendTTYACK) {
     delay(cDelay);
     Serial.print("ttyack;");
+  }
+}
+
+void protocol_button_check() {
+  // No debounce/edge-detection needed: touching lastWakeMs repeatedly
+  // while the button is held is idempotent, and a released button simply
+  // lets normal idle timing resume on its own.
+  if (digitalRead(PIN_WAKE_BTN) == LOW) {
+    lastWakeMs = millis();
   }
 }
 
@@ -445,7 +469,7 @@ void protocol_saver_check() {
     }
     return;
   }
-  bool shouldBlank = (millis() - lastActivityMs) >= saverIntervalMs;
+  bool shouldBlank = (millis() - lastWakeMs) >= saverIntervalMs;
   if (shouldBlank && !saverBlanked) {
     display_off();
     saverBlanked = true;

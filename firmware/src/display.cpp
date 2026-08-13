@@ -1,6 +1,7 @@
 #include "display.h"
 #include "gc9a01.h"
 #include "pins.h"
+#include "version.h"
 #include <JPEGDEC.h>
 #include <cmath>
 #include <cstring>
@@ -257,12 +258,22 @@ void display_off() {
 void display_show_start_screen() {
   gfx.fillScreenFast(0x0000);
   gfx.setTextColor(0xFFFF);
+  int16_t x1, y1;
+  uint16_t w, h;
+
   gfx.setTextSize(2);
-  gfx.setCursor(DISP_CX - 60, DISP_CY - 20);
+  gfx.getTextBounds("tty2oled", 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY - 40);
   gfx.print("tty2oled");
+
   gfx.setTextSize(1);
-  gfx.setCursor(DISP_CX - 30, DISP_CY + 10);
-  gfx.print("GC9A01");
+  gfx.getTextBounds("GC9A01  v" FW_VERSION, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY - 5);
+  gfx.print("GC9A01  v" FW_VERSION);
+
+  gfx.getTextBounds(REPO_URL, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY + 20);
+  gfx.print(REPO_URL);
 }
 
 void display_show_corename(const String &name) {

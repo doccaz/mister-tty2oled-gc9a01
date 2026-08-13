@@ -250,8 +250,8 @@ SSD1306 (72×40 visible, addressed as a 128×64 controller with a
 WLED usermod for the same panel, not re-derived geometrically; a naive
 `(128-72)/2, (64-40)/2` centering clips on real hardware) over I2C on
 `PIN_OLED_SDA`/`PIN_OLED_SCL` (GPIO5/6). It's a **separate display from
-the GC9A01** — shows firmware/connection status (core name, RX activity,
-uptime), not marquee art. `oled_status_loop()` is rate-limited to ~100ms
+the GC9A01** — shows firmware/connection status (core name, firmware
+version, RX activity, uptime), not marquee art. `oled_status_loop()` is rate-limited to ~100ms
 redraws and is called from `main.cpp`'s `loop()`. Because an I2C
 `sendBuffer()` (~20ms) is long enough to starve `Serial`'s RX queue drain
 if it runs mid-transfer (the exact class of bug that broke `CMDCORC`
@@ -271,6 +271,43 @@ ESP32-C3-mini + 0.42" OLED combo
 init/offset/font conventions, not the WLED-specific dashboard content
 (effect name/brightness graph) or its config/button/LED-heartbeat layer,
 none of which apply here.
+
+### Firmware version and repo URL
+
+`firmware/src/version.h` defines `FW_VERSION` and `REPO_URL` as the
+single place to bump on release — shared by `protocol.cpp` (`CMDHWINF`'s
+reply, `CMDSHSYSHW`'s screen), `display.cpp` (GC9A01 boot splash), and
+`oled_status.cpp` (status dashboard, appended to the same line as the
+existing RX indicator to fit the tiny OLED's ~31px of usable vertical
+space). `REPO_URL` deliberately omits the `github.com/` prefix — the full
+URL is ~240px wide at the boot splash's 6px/char font, wider than the
+240px display itself; the shorter `owner/repo` form fits within the
+round display's ~91%-inset safe area at all three splash-screen line
+positions (verified on real hardware 2026-08-13, after an initial version
+that centered "tty2oled" with a fixed pixel offset - now `getTextBounds()`
+on every line instead, like `display_show_corename()` already did).
+
+### GPIO9 wake button
+
+This board's onboard "BOOT" pushbutton (GPIO9) is repurposed at runtime
+as a screensaver wake button (`protocol.cpp`'s `protocol_button_check()`,
+polled from `main.cpp`'s `loop()`). GPIO9 is a C3 strapping pin (pulled
+low at reset = download mode), which is why it's on `pins.h`'s
+"avoid wiring anything else to this" list — but that only matters during
+boot, not while running, so reading it as a plain input afterward is
+safe and doesn't interfere with normal flashing/boot. No debounce logic:
+touching the idle timer repeatedly while the button is held is
+idempotent, and releasing it just lets normal idle timing resume on its
+own.
+
+Screensaver idle timing runs off a separate `lastWakeMs` timestamp, not
+the pre-existing `lastActivityMs` — `lastActivityMs` is also what
+`oled_status.cpp`'s dashboard uses for its serial-RX indicator, and a
+button press isn't a received command, so touching the shared timestamp
+would make that indicator lie. `protocol_process()` keeps both in sync on
+every dispatched line; only the button touches `lastWakeMs` alone.
+Verified end-to-end on real hardware 2026-08-13: screensaver blanks after
+idle, GPIO9 press wakes it and restores the last picture.
 
 ### Why a custom GC9A01 driver, not a display library
 

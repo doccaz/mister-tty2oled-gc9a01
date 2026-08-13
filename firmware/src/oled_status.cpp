@@ -10,6 +10,7 @@
 
 #include "pins.h"
 #include "protocol.h"
+#include "version.h"
 #include <Arduino.h>
 #include <U8g2lib.h>
 #include <Wire.h>
@@ -47,7 +48,8 @@ void drawDashboard() {
 
   unsigned long sinceActivity = millis() - protocol_last_activity_ms();
   u8g2.setCursor(kOffX, kOffY + 30);
-  u8g2.print(sinceActivity < 2000 ? "RX" : "  ");
+  u8g2.print("v" FW_VERSION);
+  u8g2.print(sinceActivity < 2000 ? " RX" : "   ");
 
   unsigned long uptimeSec = (millis() - g_bootMs) / 1000;
   u8g2.setCursor(kOffX, kOffY + 38);
