@@ -19,3 +19,8 @@ void protocol_process();
 // path (see oled_status.cpp).
 const String &protocol_get_corename();
 unsigned long protocol_last_activity_ms(); // millis() timestamp of last dispatched line
+
+// CMDSAVER/CMDSWSAVER idle-blank check - call every loop() iteration,
+// after protocol_process(), never from inside a transfer path. No-op
+// when the screensaver is disabled (the default).
+void protocol_saver_check();

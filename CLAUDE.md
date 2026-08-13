@@ -118,6 +118,82 @@ Compatible commands (same behavior as upstream): `CMDCLS`/`cls`, `CMDCLSWU`,
 `CMDSECD,<ms>`, `CMDSHCD`, `CMDSTTYACK,<0|1>`, `CMDRESET`, and a bare line
 with no `CMD` prefix (legacy plain-corename fallback).
 
+Additional compatible commands, added 2026-08-13 and verified on real
+hardware (see `protocol.cpp`'s `dispatch()`):
+
+- `CMDBYE`, `CMDTEST`, `CMDSHSYSHW` — cosmetic/diagnostic screens
+  (farewell text, concentric-ring test pattern, FW version/chip
+  model/free heap). Built entirely from existing `display_draw_text`/
+  `draw_circle`-style primitives, not ported bitmap assets — RAM is
+  already tight (see "RAM headroom") and the reference's icon/test
+  bitmaps are separate-provenance assets we don't have license to reuse.
+- `CMDHWINF` — replies over `Serial` with `HW<id>;<version>;` (no
+  trailing newline; `web/src/serial.ts` tokenizes on `;`, not `\n`, same
+  as `ttyack;`/`ttyrdy;`). Our hardware id is `HWGC9A01C` — a new value
+  outside the reference's enum, confirmed safe because only its
+  `installer.sh` (a separate setup tool) keys off this string;
+  `tty2oled.sh` itself never reads it.
+- `CMDCLST,<transition>,<color 0-15>` — fill the screen with a solid
+  4bpp-grayscale color and reveal it with a transition. Implemented by
+  filling `legacyBuf` with the solid color and reusing the existing
+  legacy-GSC draw path wholesale (exactly like the reference fills
+  `logoBin`), so `CMDSPIC`/`CMDSSCP` redisplay of a `CMDCLST` screen falls
+  out for free rather than needing a separate solid-fill code path.
+- `CMDSPIC[,<effect>]` — redisplay the last-drawn picture (any kind) with
+  a new transition. No redecode: JPEG-sourced pictures replay straight
+  from `display.cpp`'s still-resident `g_frame`; legacy XBM/GSC pictures
+  replay from `legacyBuf`, which already persists between commands.
+  Tracked via `protocol.cpp`'s `PictureKind lastPictureKind` +
+  `redisplayCurrent()`, set by every picture-drawing path (`CMDCOR`/
+  `CMDAPD`/`CMDCORC`/`CMDCLST`). Matches the reference's own behavior of
+  *not* clearing the screen first — `transitionReveal()`/`oled_drawlogo()`
+  both only ever draw new pixels over whatever's already there, so
+  replaying a transition over *unchanged* content is visually a no-op in
+  both implementations, not a bug.
+- `CMDSSCP` — redisplay the last-drawn picture at reduced ("1/4 area")
+  size, no effect parameter (matching the reference). JPEG downsamples
+  directly from `g_frame` (nearest-neighbor ×2, no new buffer — a 120×120
+  scratch buffer would cost another ~28KB of static RAM we don't have to
+  spare); legacy XBM/GSC reuses `display.cpp`'s `drawLegacyScaled()`
+  helper (shared with the full-size `display_draw_legacy_xbm/gsc`) with a
+  smaller destination rect instead of duplicating the pixel-decode loop.
+- `CMDSAVER,<mode>,<interval-sec>,<logotime-sec>` / `CMDSWSAVER,<0|1>` —
+  **parses the reference's exact grammar and range clamps** (mode 0-255,
+  interval 5-600s, logotime 20-600s) so a real `tty2oled.sh` never
+  errors, but only implements simple blank-after-idle (`mode>0` ⇒
+  enabled, blank via `display_off()` after `interval` seconds of
+  `protocol_last_activity_ms()` idle, wake via `redisplayCurrent()` on
+  the next command) — **not** the reference's animated multi-screen/
+  starfield/toaster screensaver system. `logotime` is parsed for grammar
+  compatibility but intentionally unused. This is a deliberate scope cut,
+  not an oversight — see `protocol.cpp`'s `CMDSAVER`/`CMDSWSAVER`
+  handlers for the exact divergence.
+
+While implementing these, also fixed a latent bug in the existing
+`CMDCOR`/`CMDAPD` legacy path: `effect < 0` was silently mapped to a
+hardcoded `1` instead of randomizing like the reference's `-1` convention
+does. All effect-taking commands (`CMDCOR`/`CMDAPD`/`CMDSPIC`/`CMDCLST`)
+now share one `resolveEffect()` helper in `protocol.cpp` that clamps to
+our curated `1..5` set and randomizes on `-1`, so `-1` means the same
+thing everywhere.
+
+### Backlight PWM has no effect on at least one real GC9A01 module
+
+Discovered 2026-08-13 while testing `CMDSAVER`: `CMDDOFF`/`CMDCON,0`
+(both drive the same `ledcWrite()` PWM call on `PIN_LCD_BL`) were
+confirmed on real hardware to have **zero visible effect**, even after a
+full hardware reset — almost certainly this module's `BL` pin is wired
+straight to VCC rather than through a GPIO-controlled transistor, not a
+software bug. Since backlight control can't be relied on, `display_off()`
+(`display.cpp`) now **blanks by content** (`fillScreenFast(0x0000)`) in
+addition to the (harmless, possibly-ineffective) PWM call, and callers in
+`protocol.cpp` (`CMDDON`, the screensaver wake path) explicitly call
+`redisplayCurrent()` after `display_on()` to restore content -
+`display_on()` itself has no generic "what was on screen" concept beyond
+`g_frame`'s JPEG-only content, so it can't restore anything by itself.
+Confirmed working end-to-end on real hardware for both `CMDDOFF`/`CMDDON`
+and the full `CMDSAVER` blank/wake cycle.
+
 Legacy picture transfer: `CMDCOR,<name>,<effect>` or `CMDAPD,...` followed
 by a **blocking fixed-size** read of exactly 2048 (1bpp XBM) or 8192 (4bpp
 grayscale "GSC") raw bytes, classified purely by byte count — identical to
@@ -353,17 +429,30 @@ to pull real color art from - that choice was explicitly not made yet.
   shows the "tty2oled" status dashboard, both after physically moving the
   MOSI/DC jumpers from their original GPIO6/GPIO5 and reflashing.
 - Onboard status OLED (`oled_status.h`/`.cpp`) is confirmed showing the
-  live dashboard on real hardware (2026-08-13). Not yet exercised: its
-  interaction with an in-flight `CMDCORC`/legacy-picture transfer (the
+  live dashboard on real hardware (2026-08-13), **including with a
+  `CMDCORC` transfer in flight** (2026-08-13: a 5365-byte JPEG sent with
+  the OLED active completed and rendered cleanly) — the
   `oled_status_suspend()`/`resume()` guard around `readFixed()`/
-  `readExact()` is untested under load) — do a full `CMDCORC` transfer
-  next and confirm it still completes cleanly with the OLED active, given
-  the reduced RAM headroom (see "RAM headroom" above).
-- **`CMDCORC` JPEG rendering is now verified end-to-end on real hardware**
-  (2026-08-12): a full 10352-byte JPEG transferred, decoded, and rendered
-  with the iris and fade transition effects. Legacy `CMDCOR`/`CMDAPD`
-  grayscale rendering still hasn't been exercised on real hardware yet
-  (only the web app's local canvas preview and unit-level reasoning).
+  `readExact()` is confirmed working under real load, not just reasoned
+  about, and the reduced RAM headroom (see "RAM headroom" above) held up.
+- **`CMDCORC` JPEG rendering is verified end-to-end on real hardware**
+  (2026-08-12, re-confirmed 2026-08-13 with the OLED active and the new
+  protocol commands in place): JPEGs transferred, decoded, and rendered
+  correctly with wipe/iris/fade transition effects. Legacy `CMDCOR`/
+  `CMDAPD` grayscale rendering over the wire still hasn't been exercised
+  on real hardware yet (only `CMDCLST`'s reuse of the same
+  `display_draw_legacy_gsc()` draw path, and the web app's local canvas
+  preview / unit-level reasoning for the actual byte transfer).
+- **New protocol commands verified end-to-end on real hardware
+  (2026-08-13)**: `CMDBYE`, `CMDTEST`, `CMDSHSYSHW`, `CMDHWINF` (reply
+  format confirmed over the wire), `CMDCLST`, `CMDSPIC` (both JPEG- and
+  GSC-sourced redisplay), `CMDSSCP`, and the full `CMDSAVER`/`CMDSWSAVER`
+  blank-after-idle/wake cycle (see "Wire protocol" above). This testing
+  is also what surfaced and fixed the backlight-PWM hardware issue (see
+  "Backlight PWM has no effect on at least one real GC9A01 module"
+  above) — `CMDDOFF`/`CMDDON` are now confirmed working too, which they
+  weren't before (backlight PWM alone was silently a no-op on this
+  hardware).
 - The test image used for hardware validation was scaled/cropped
   incorrectly (truncated at the edges) because it was a raw ad hoc
   240×240 JPEG made directly for the test script, not run through the

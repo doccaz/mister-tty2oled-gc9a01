@@ -179,6 +179,33 @@ void transitionReveal(uint8_t effect, uint16_t durationMs) {
   }
 }
 
+// Shared nearest-neighbor scaler behind display_draw_legacy_xbm/gsc and
+// their CMDSSCP "_small" counterparts - same loop, parameterized by
+// destination rect instead of the fixed LEGACY_W/H/Y constants, so the
+// reduced-size redisplay path doesn't duplicate the pixel-decode logic.
+void drawLegacyScaled(const uint8_t *buf, uint8_t effect, bool isGsc,
+                       int16_t dstW, int16_t dstH, int16_t dstX, int16_t dstY) {
+  gfx.fillScreenFast(0x0000);
+  for (int16_t y = 0; y < dstH; y++) {
+    int16_t srcY = (y * LEGACY_SRC_H) / dstH;
+    for (int16_t x = 0; x < dstW; x++) {
+      int16_t srcX = (x * LEGACY_SRC_W) / dstW;
+      uint16_t color;
+      if (isGsc) {
+        uint8_t byte = buf[(srcX / 2) + srcY * LEGACY_SRC_LINE_4BPP];
+        uint8_t nibble = (srcX % 2 == 0) ? (byte >> 4) : (byte & 0x0F); // 4-bit grayscale
+        uint8_t gray = nibble * 17; // 0..15 -> 0..255
+        color = ((gray >> 3) << 11) | ((gray >> 2) << 5) | (gray >> 3); // RGB565
+      } else {
+        uint8_t byte = buf[srcX / 8 + srcY * LEGACY_SRC_LINE_1BPP];
+        color = bitRead(byte, srcX % 8) ? 0xFFFF : 0x0000;
+      }
+      gfx.drawPixel(dstX + x, dstY + y, color);
+    }
+    if (effect) delay(1); // crude wipe pacing; curated-effect placeholder
+  }
+}
+
 } // namespace
 
 void display_init() {
@@ -215,6 +242,16 @@ void display_on() {
 
 void display_off() {
   ledcWrite(LEDC_CHANNEL_BL, 0);
+  // Backlight PWM alone is confirmed (on real hardware, 2026-08-13) to
+  // have no visible effect on at least one GC9A01 module variant - almost
+  // certainly BL wired straight to VCC rather than through a
+  // GPIO-controlled transistor, not a software bug (CMDCON's contrast
+  // level has the exact same ledcWrite() call and is equally unaffected).
+  // Blanking by content works regardless of BL wiring, so do that too;
+  // display_on() doesn't restore it directly (display.cpp has no
+  // generic "last screen" concept beyond g_frame's JPEG-only content) -
+  // protocol.cpp's callers are responsible for redrawing after display_on().
+  gfx.fillScreenFast(0x0000);
 }
 
 void display_show_start_screen() {
@@ -272,36 +309,21 @@ void display_draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
 }
 
 void display_draw_legacy_xbm(const uint8_t *buf, uint8_t effect) {
-  gfx.fillScreenFast(0x0000);
-  for (int16_t y = 0; y < LEGACY_H; y++) {
-    // Nearest-neighbor scale (not crop) - see LEGACY_W/H comment above.
-    int16_t srcY = (y * LEGACY_SRC_H) / LEGACY_H;
-    for (int16_t x = 0; x < LEGACY_W; x++) {
-      int16_t srcX = (x * LEGACY_SRC_W) / LEGACY_W;
-      uint8_t byte = buf[srcX / 8 + srcY * LEGACY_SRC_LINE_1BPP];
-      bool on = bitRead(byte, srcX % 8);
-      gfx.drawPixel(x, LEGACY_Y + y, on ? 0xFFFF : 0x0000);
-    }
-    if (effect) delay(1); // crude wipe pacing; curated-effect placeholder
-  }
+  drawLegacyScaled(buf, effect, false, LEGACY_W, LEGACY_H, 0, LEGACY_Y);
 }
 
 void display_draw_legacy_gsc(const uint8_t *buf, uint8_t effect) {
-  gfx.fillScreenFast(0x0000);
-  for (int16_t y = 0; y < LEGACY_H; y++) {
-    // Nearest-neighbor scale (not crop) - see LEGACY_W/H comment above.
-    int16_t srcY = (y * LEGACY_SRC_H) / LEGACY_H;
-    for (int16_t x = 0; x < LEGACY_W; x++) {
-      int16_t srcX = (x * LEGACY_SRC_W) / LEGACY_W;
-      int16_t byteIdx = (srcX / 2) + srcY * LEGACY_SRC_LINE_4BPP;
-      uint8_t byte = buf[byteIdx];
-      uint8_t nibble = (srcX % 2 == 0) ? (byte >> 4) : (byte & 0x0F); // 4-bit grayscale
-      uint8_t gray = nibble * 17; // 0..15 -> 0..255
-      uint16_t color = ((gray >> 3) << 11) | ((gray >> 2) << 5) | (gray >> 3); // RGB565
-      gfx.drawPixel(x, LEGACY_Y + y, color);
-    }
-    if (effect) delay(1);
-  }
+  drawLegacyScaled(buf, effect, true, LEGACY_W, LEGACY_H, 0, LEGACY_Y);
+}
+
+void display_draw_legacy_xbm_small(const uint8_t *buf) {
+  constexpr int16_t w = LEGACY_W / 2, h = LEGACY_H / 2; // half res each way = ~1/4 area
+  drawLegacyScaled(buf, 0, false, w, h, DISP_CX - w / 2, DISP_CY - h / 2);
+}
+
+void display_draw_legacy_gsc_small(const uint8_t *buf) {
+  constexpr int16_t w = LEGACY_W / 2, h = LEGACY_H / 2;
+  drawLegacyScaled(buf, 0, true, w, h, DISP_CX - w / 2, DISP_CY - h / 2);
 }
 
 void display_draw_jpeg(const uint8_t *buf, size_t len, uint8_t effect, uint16_t durationMs) {
@@ -321,6 +343,73 @@ void display_draw_jpeg(const uint8_t *buf, size_t len, uint8_t effect, uint16_t 
   jpeg.close();
 
   transitionReveal(effect, durationMs);
+}
+
+void display_replay_jpeg(uint8_t effect, uint16_t durationMs) {
+  // g_frame already holds the last-decoded CMDCORC frame - no redecode
+  // needed. Matches the reference's own CMDSPIC, which also just re-runs
+  // its reveal routine over the still-resident picture data rather than
+  // clearing first: transitionReveal() only ever draws g_frame's pixels
+  // over whatever's already on the glass, so replaying it here reveals
+  // the same content it's already showing, exactly as upstream does.
+  transitionReveal(effect, durationMs);
+}
+
+void display_draw_jpeg_small() {
+  // Downsampled directly from g_frame (nearest-neighbor, factor 2) rather
+  // than through a new intermediate buffer - a 120x120 scratch buffer
+  // would cost another ~28KB of static RAM we don't have to spare (see
+  // CLAUDE.md "RAM headroom").
+  constexpr int16_t w = DISP_W / 2, h = DISP_H / 2;
+  constexpr int16_t dstX = (DISP_W - w) / 2, dstY = (DISP_H - h) / 2;
+  gfx.fillScreenFast(0x0000);
+  for (int16_t y = 0; y < h; y++) {
+    int16_t srcY = y * 2;
+    for (int16_t x = 0; x < w; x++) {
+      int16_t srcX = x * 2;
+      uint16_t c = swap16(g_frame[srcY * DISP_W + srcX]); // g_frame is byte-swapped, see its declaration comment
+      gfx.drawPixel(dstX + x, dstY + y, c);
+    }
+  }
+}
+
+void display_show_bye() {
+  gfx.fillScreenFast(0x0000);
+  gfx.setTextColor(0xFFFF);
+  gfx.drawCircle(DISP_CX, DISP_CY - 30, 20, 0xFFFF);
+  gfx.setTextSize(2);
+  int16_t x1, y1;
+  uint16_t w, h;
+  gfx.getTextBounds("Bye!", 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY + 20);
+  gfx.print("Bye!");
+}
+
+void display_show_test_pattern() {
+  const uint16_t colors[] = {0xF800, 0xFFE0, 0x07E0, 0x07FF, 0x001F, 0xF81F};
+  constexpr int rings = 6;
+  gfx.fillScreenFast(0x0000);
+  for (int i = 0; i < rings; i++) {
+    int16_t r = (DISP_CX * (rings - i)) / rings;
+    gfx.fillCircle(DISP_CX, DISP_CY, r, colors[i]);
+  }
+}
+
+void display_show_sysinfo(const String &fwVersion) {
+  gfx.fillScreenFast(0x0000);
+  gfx.setTextColor(0xFFFF);
+  gfx.setTextSize(1);
+  gfx.setCursor(20, DISP_CY - 40);
+  gfx.print("SysInfo");
+  gfx.setCursor(20, DISP_CY - 20);
+  gfx.print("FW: ");
+  gfx.print(fwVersion);
+  gfx.setCursor(20, DISP_CY);
+  gfx.print("Chip: ");
+  gfx.print(ESP.getChipModel());
+  gfx.setCursor(20, DISP_CY + 20);
+  gfx.print("Free heap: ");
+  gfx.print(ESP.getFreeHeap());
 }
 
 void display_self_test() {
