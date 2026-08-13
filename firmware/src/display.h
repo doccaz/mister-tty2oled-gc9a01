@@ -23,6 +23,15 @@ void display_show_bye();                        // CMDBYE - built-in text/shape 
 void display_show_test_pattern();                // CMDTEST - concentric color rings, not the original's bitmap
 void display_show_sysinfo(const String &fwVersion); // CMDSHSYSHW
 
+// WiFi bootstrap screens (see wifi_manager.h). display_toggle_wifi_qr()
+// flips between the AP-status screen most recently shown via
+// display_show_ap_mode() and a scannable WiFi-join QR code for that same
+// AP - takes no arguments, it remembers the ssid/ip itself.
+void display_show_ap_mode(const String &ssid, const String &ip);
+void display_show_connecting_wifi(const String &ssid);
+void display_show_wifi_connected(const String &ssid, const String &ip);
+void display_toggle_wifi_qr();
+
 // Text/geometry primitives for CMDTXT / CMDGEO compatibility
 void display_draw_text(int16_t x, int16_t y, uint8_t fontSize, const String &text);
 void display_draw_rect(int16_t x, int16_t y, int16_t w, int16_t h, bool fill);

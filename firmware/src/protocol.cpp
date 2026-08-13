@@ -3,6 +3,7 @@
 #include "oled_status.h"
 #include "pins.h"
 #include "version.h"
+#include "wifi_manager.h"
 #include <Arduino.h>
 #include <cstring>
 
@@ -444,12 +445,23 @@ void protocol_process() {
 }
 
 void protocol_button_check() {
-  // No debounce/edge-detection needed: touching lastWakeMs repeatedly
-  // while the button is held is idempotent, and a released button simply
-  // lets normal idle timing resume on its own.
-  if (digitalRead(PIN_WAKE_BTN) == LOW) {
+  bool pressed = (digitalRead(PIN_WAKE_BTN) == LOW);
+
+  // Level-based touch of lastWakeMs is unchanged and still idempotent
+  // while held - only the screensaver-wake role needs this, and the
+  // screensaver isn't ticked in AP mode anyway (see protocol_saver_check()).
+  if (pressed) {
     lastWakeMs = millis();
   }
+
+  // AP-mode QR toggle needs an actual press edge (not "is held"), so a
+  // single press flips the display once rather than re-triggering every
+  // loop() iteration for as long as the button stays down.
+  static bool wasPressed = false;
+  if (pressed && !wasPressed && wifi_manager_is_ap_mode()) {
+    display_toggle_wifi_qr();
+  }
+  wasPressed = pressed;
 }
 
 const String &protocol_get_corename() {
@@ -461,6 +473,11 @@ unsigned long protocol_last_activity_ms() {
 }
 
 void protocol_saver_check() {
+  // No idle-blank during WiFi setup - the AP-status/QR screens should
+  // stay up until the button is pressed or WiFi gets configured, not
+  // fight the QR toggle with a second idle timer.
+  if (wifi_manager_is_ap_mode()) return;
+
   if (!saverEnabled) {
     if (saverBlanked) {
       display_on();

@@ -3,6 +3,7 @@
 #include "pins.h"
 #include "version.h"
 #include <JPEGDEC.h>
+#include <qrcode.h>
 #include <cmath>
 #include <cstring>
 
@@ -31,6 +32,13 @@ JPEGDEC jpeg;
 
 uint8_t g_contrast = 128;
 uint8_t g_rotation = 0;
+
+// State for display_toggle_wifi_qr(): remembers the AP-status screen's
+// ssid/ip (set by display_show_ap_mode()) so a button press can flip to
+// the QR view and back without protocol.cpp needing to pass them through.
+String g_apSsid;
+String g_apIp;
+bool g_qrShown = false;
 
 // LEDC backlight PWM channel. Using the legacy ledcSetup/ledcAttachPin/
 // ledcWrite(channel,...) API (not the newer ledcAttach(pin,...) API) since
@@ -446,6 +454,141 @@ void display_show_sysinfo(const String &fwVersion) {
   gfx.setCursor(20, DISP_CY + 20);
   gfx.print("Free heap: ");
   gfx.print(ESP.getFreeHeap());
+}
+
+namespace {
+void drawApStatusScreen() {
+  gfx.fillScreenFast(0x0000);
+  gfx.setTextColor(0xFFFF);
+  int16_t x1, y1;
+  uint16_t w, h;
+
+  gfx.setTextSize(2);
+  gfx.getTextBounds("AP Mode", 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY - 40);
+  gfx.print("AP Mode");
+
+  gfx.setTextSize(1);
+  gfx.getTextBounds(g_apSsid, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY - 5);
+  gfx.print(g_apSsid);
+
+  gfx.getTextBounds(g_apIp, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY + 15);
+  gfx.print(g_apIp);
+
+  const char *hint = "Press button for QR";
+  gfx.getTextBounds(hint, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY + 60);
+  gfx.print(hint);
+}
+
+// Renders a WiFi-join QR (open network, per the confirmed AP design) for
+// g_apSsid. Builds the module grid into g_frame as scratch (safe to
+// clobber - AP mode never has a decoded CMDCORC JPEG on screen at the
+// same time) and pushes it in one pushRect() call, rather than one
+// fillRect()/SPI-transaction per module - that per-call transaction cost
+// is exactly what made the iris/wipe effects stall before they were
+// batched (see CLAUDE.md's "per-row transaction stall" section).
+void drawWifiQrScreen() {
+  String payload = "WIFI:T:nopass;S:" + g_apSsid + ";;";
+
+  QRCode qrcode;
+  uint8_t qrData[qrcode_getBufferSize(4)];
+  qrcode_initText(&qrcode, qrData, 4, ECC_LOW, payload.c_str());
+
+  // The QR is a square, but this is a ROUND display - a square sized to
+  // the naive 200px "safe area" put its corners (exactly where the
+  // finder patterns live) past the physical circular bezel, which
+  // clipped them on real hardware. A square centered on a circle of
+  // radius R fits entirely inside it only up to side <= R*sqrt(2); using
+  // a conservative R (not the full 120px display radius) leaves margin
+  // for the glass/bezel being a little smaller than the panel's nominal
+  // active area. No vertical offset either - shifting the square off
+  //-center for the SSID text below only made the clipping worse on one
+  // edge; the SSID text is thin and tolerates sitting near the edge far
+  // better than the QR's finder-pattern corners do.
+  constexpr int kQrSafeRadius = 100;
+  int scale = (int)((kQrSafeRadius * 1.4142f) / qrcode.size);
+  if (scale < 1) scale = 1;
+  int qrPx = qrcode.size * scale;
+  int ox = DISP_CX - qrPx / 2;
+  int oy = DISP_CY - qrPx / 2;
+
+  memset(g_frame, 0, sizeof(g_frame));
+  for (int y = 0; y < qrPx; y++) {
+    uint16_t *row = &g_frame[(oy + y) * DISP_W + ox];
+    for (int x = 0; x < qrPx; x++) {
+      // 0x0000/0xFFFF are byte-swap invariant, so no swap16() needed here
+      // unlike g_frame's usual JPEG-decoded content.
+      row[x] = qrcode_getModule(&qrcode, x / scale, y / scale) ? 0xFFFF : 0x0000;
+    }
+  }
+
+  gfx.fillScreenFast(0x0000);
+  gfx.pushRect(ox, oy, qrPx, qrPx, &g_frame[oy * DISP_W + ox], DISP_W);
+
+  gfx.setTextColor(0xFFFF);
+  gfx.setTextSize(1);
+  int16_t x1, y1;
+  uint16_t w, h;
+  gfx.getTextBounds(g_apSsid, 0, 0, &x1, &y1, &w, &h);
+  int16_t textY = oy + qrPx + 16;
+  if (textY > DISP_H - 20) textY = DISP_H - 20; // keep inside the circle's safe area
+  gfx.setCursor(DISP_CX - w / 2, textY);
+  gfx.print(g_apSsid);
+}
+} // namespace
+
+void display_show_ap_mode(const String &ssid, const String &ip) {
+  g_apSsid = ssid;
+  g_apIp = ip;
+  g_qrShown = false;
+  drawApStatusScreen();
+}
+
+void display_show_connecting_wifi(const String &ssid) {
+  gfx.fillScreenFast(0x0000);
+  gfx.setTextColor(0xFFFF);
+  gfx.setTextSize(1);
+  int16_t x1, y1;
+  uint16_t w, h;
+  String line = "Connecting to " + ssid;
+  gfx.getTextBounds(line, 0, 0, &x1, &y1, &w, &h);
+  int16_t x = w > DISP_W - 20 ? 10 : DISP_CX - w / 2; // keep inside the circle's safe area
+  gfx.setCursor(x, DISP_CY);
+  gfx.print(line);
+}
+
+void display_show_wifi_connected(const String &ssid, const String &ip) {
+  gfx.fillScreenFast(0x0000);
+  gfx.setTextColor(0xFFFF);
+  int16_t x1, y1;
+  uint16_t w, h;
+
+  gfx.setTextSize(2);
+  const char *title = "Connected";
+  gfx.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY - 30);
+  gfx.print(title);
+
+  gfx.setTextSize(1);
+  gfx.getTextBounds(ssid, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY);
+  gfx.print(ssid);
+
+  gfx.getTextBounds(ip, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY + 20);
+  gfx.print(ip);
+}
+
+void display_toggle_wifi_qr() {
+  g_qrShown = !g_qrShown;
+  if (g_qrShown) {
+    drawWifiQrScreen();
+  } else {
+    drawApStatusScreen();
+  }
 }
 
 void display_self_test() {
