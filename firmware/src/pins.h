@@ -26,3 +26,10 @@
 // status display. Fixed pins on this board variant.
 #define PIN_OLED_SDA 5
 #define PIN_OLED_SCL 6
+
+// Onboard "BOOT" pushbutton, repurposed at runtime as a screensaver wake
+// button (protocol.cpp's protocol_button_check()). GPIO9 is a strapping
+// pin (pulled low at reset = download mode) - that only matters during
+// boot, not while running, so reading it as a plain input here is safe.
+// Active-low: pressed = LOW.
+#define PIN_WAKE_BTN 9
