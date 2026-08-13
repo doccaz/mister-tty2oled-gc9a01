@@ -32,6 +32,13 @@ void display_show_connecting_wifi(const String &ssid);
 void display_show_wifi_connected(const String &ssid, const String &ip, const String &hostname);
 void display_toggle_wifi_qr();
 
+// MQTT notification banner (see mqtt_client.h) - fills a banner region
+// and draws a single truncated line (no word wrap for v1). Does not
+// remember/restore prior content itself - mqtt_client.cpp's revert timer
+// calls protocol_redisplay_current() for that, same as the screensaver
+// wake path already does.
+void display_show_notification_text(const String &text);
+
 // Text/geometry primitives for CMDTXT / CMDGEO compatibility
 void display_draw_text(int16_t x, int16_t y, uint8_t fontSize, const String &text);
 void display_draw_rect(int16_t x, int16_t y, int16_t w, int16_t h, bool fill);
@@ -63,6 +70,14 @@ void display_draw_jpeg_small();
 // ../../web/src/effects.ts for the shared id list) over durationMs.
 // durationMs == 0 or effect 0 draws instantly.
 void display_draw_jpeg(const uint8_t *buf, size_t len, uint8_t effect, uint16_t durationMs);
+
+// Decodes and pushes straight to the display, WITHOUT touching g_frame -
+// unlike display_draw_jpeg(), this does not become "the last shown
+// picture" (see mqtt_client.h's notification-revert design: an overlay
+// that clobbered g_frame would make reverting just redraw itself). No
+// transition effect - always instant, matching the banner-overlay style
+// display_show_notification_text() already uses for the text case.
+void display_draw_jpeg_transient(const uint8_t *buf, size_t len);
 
 // Hardware stability self-test: cycles solid full-screen colors + text via
 // the same fillScreenFast()/pushRect() code paths used by the real

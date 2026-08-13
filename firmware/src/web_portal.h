@@ -12,12 +12,19 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include "wifi_config.h"
+#include "mqtt_config.h"
 
 class WebPortal {
  public:
   // apMode selects which _handleRoot() renders: the setup form (AP mode,
   // no WiFi configured yet) or the status page (STA mode, connected).
   void begin(WifiConfigStore *config, bool apMode);
+
+  // STA mode only: adds the MQTT broker settings form to the status page
+  // and the /mqtt-save route. Called once from wifi_manager's
+  // enterConnected(), after begin(..., false) - not passed to begin()
+  // itself since AP mode's setup form has no use for it.
+  void setMqttConfig(MqttConfigStore *mqttConfig);
 
   // AP mode only: starts the captive-portal DNS wildcard redirect.
   void startCaptiveDns(IPAddress apIp);
@@ -30,10 +37,12 @@ class WebPortal {
   void handleReset();
   void handleStatus();
   void handleScan(); // AP mode only: WiFi.scanNetworks(), returns JSON for the setup form's dropdown
+  void handleMqttSave();
 
   WebServer _server{80};
   DNSServer _dns;
   WifiConfigStore *_config = nullptr;
+  MqttConfigStore *_mqttConfig = nullptr;
   bool _apMode = false;
   bool _dnsActive = false;
 };

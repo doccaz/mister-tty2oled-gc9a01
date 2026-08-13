@@ -796,6 +796,120 @@ whatever the auto-discovery gap is for this one library.
   `sendCommand()`/`sendColorArt()` ack wait immediately instead of
   leaving the UI looking stuck for the full 6s ack timeout.
 
+## MQTT notifications (2026-08-13)
+
+A third, independent input channel - text and image-by-URL notifications
+pushed from Home Assistant or anything else on the local network that
+speaks MQTT (`firmware/src/mqtt_client.h`/`.cpp`, `mqtt_config.h`), with
+no web app or MiSTer involved. Explicitly scoped narrower than the
+earlier "unknown core → search a catalog → cache" idea (see the "Follow-
+up research" note under full-color marquee support below) - notifications
+are one-shot and don't need a persistent cache or a real art catalog,
+neither of which exist yet.
+
+**Topics**: `<prefix>/text` (payload is the notification text verbatim)
+and `<prefix>/image` (payload is a URL to fetch and show), where
+`<prefix>` defaults to `tty2oled/<deviceName>` (overridable via the STA-
+mode web portal's new MQTT section, `POST /mqtt-save`). Both show for a
+configurable duration (default 8000ms, `MqttConfig.durationMs`) then
+revert to whatever was on screen before - `protocol_redisplay_current()`,
+newly exposed in `protocol.h` for this (previously `redisplayCurrent()`
+was file-local in `protocol.cpp`, used only internally by the
+screensaver wake path).
+
+**Image payloads are URLs, not raw bytes** - deliberately, to avoid
+reintroducing the large-contiguous-allocation risk this project already
+solved for the WS command protocol: MQTT has no built-in payload
+chunking the way our own `CMDCORC` grammar does, so a raw JPEG in one
+MQTT publish would need `PubSubClient`'s receive buffer sized to the
+whole image at once. A URL means the device does a normal HTTP GET,
+streamed into the same static `colorBuf` `CMDCORC` already uses via the
+same guard (`protocol_ws_xfer_begin()`/`_append()`/`_complete()`) - no
+new buffer, no new allocation risk.
+
+**No `HTTPClient` - a hand-rolled HTTP/1.1 GET instead.** `HTTPClient.h`
+unconditionally references `WiFiClientSecure`'s TLS methods in its own
+`.cpp` (not gated by the runtime URL scheme), and this framework's
+mbedtls config has PSK cipher suites disabled - `ssl_client.cpp`'s real
+implementation compiles out behind an `#if` guard that isn't satisfied,
+leaving a stub with none of the symbols `WiFiClientSecure.cpp` calls,
+which fails at *link* time (not the "header not found" LDF gap
+`links2004/WebSockets` hit - a different, worse failure mode: it
+compiles, and only fails when the linker tries to resolve
+`start_ssl_client`/etc). Since this project only ever needs plain
+`http://` for local-network image URLs, `mqtt_client.cpp`'s `httpGet()`
+is a small hand-rolled GET over plain `WiFiClient` instead - in the same
+spirit as this project's other hand-rolled wire parsing
+(`protocol.cpp`'s `splitField()`). No `https://` support - a deliberate
+v1 scope cut, not a limitation worth chasing given the mbedtls
+reconfiguration it would require.
+
+**The picture-buffer guard widened from two writers to three.** The WS
+feature added `wsXferActive`/`protocol_ws_xfer_in_progress()` to stop a
+serial `CMDCORC` racing a chunked WS transfer on `colorBuf`. MQTT's image
+fetch is a third writer spanning multiple `loop()` iterations (an
+`WiFiClient` stream, polled), so it claims/releases the same flag before
+touching `colorBuf` too - same function names (`protocol_ws_xfer_*`,
+kept despite now covering three callers, not worth renaming across every
+call site for no functional change), just called from a third place.
+
+### Two real bugs found only by testing on real hardware (2026-08-13)
+
+1. **Image notifications never reverted - because they overwrote the
+   very state they should have reverted back to.** The first
+   implementation used the existing `protocol_ws_xfer_finish()` (same as
+   `CMDCORC`), which decodes into the shared `g_frame` and sets
+   `lastPictureKind = JPEG` - meaning after a notification image, "the
+   last shown picture" *was* the notification, so
+   `protocol_redisplay_current()` just redrew the notification again,
+   forever. Root-caused by testing (confirmed: it never reverted, stayed
+   on the fetched image). Fixed with a new `display_draw_jpeg_transient()`
+   (`display.cpp`) that decodes and pushes straight to the physical
+   display without touching `g_frame` at all, and a matching
+   `protocol_ws_xfer_finish_transient()` that skips the
+   `lastPictureKind`/`actCorename` update - so the underlying marquee
+   art's `g_frame` content is never disturbed, and reverting later just
+   re-reveals it unchanged. Confirmed fixed on real hardware: a real
+   `CMDCORC` picture pushed first, then a notification, correctly
+   reverted to the original picture afterward - both for text and image
+   notifications.
+2. **The first version of `display_draw_jpeg_transient()` hung the
+   device outright** (confirmed via the `Serial0` debug channel: a
+   `[mqtt] calling finish_transient` line printed, `finish_transient
+   returned` never did, no crash-reboot banner either - a true hang, not
+   a crash). Root cause: it wrapped `jpeg.decode()` in
+   `beginBatch()`/`endBatch()`, holding an SPI transaction open across
+   JPEGDEC's own internal per-block decode compute time, not just the
+   `pushRectBatched()` calls themselves - unlike every other batched-push
+   case in this file (fade, iris), which only ever wrap a loop *we*
+   fully control. Fixed by pushing one `pushRect()` per JPEG block
+   instead (its own transaction each), which - because JPEGDEC calls
+   back once per MCU block (~15-30 times for a 240x240 image), not once
+   per row - still avoids the older "per-row transaction stall" class of
+   problem (see that section above) without needing to hold a transaction
+   open across third-party decode timing. Confirmed fixed: the function
+   now returns and the image displays correctly.
+
+Also found and fixed in the same session: the MQTT client ID was
+accidentally `"tty2oled-" + wifi_manager_device_name()`, doubling to
+`tty2oled-tty2oled-B610` in the broker's connection log -
+`wifi_manager_device_name()` already returns `"tty2oled-XXXX"`.
+
+### Verified end-to-end on real hardware (2026-08-13)
+
+Both build variants clean at ~60% static RAM (`knolleary/PubSubClient` is
+small; no `lib_extra_dirs`-style LDF workaround needed since this feature
+avoids `WiFiClientSecure` entirely, unlike WebSockets). Tested against a
+real broker (a throwaway `eclipse-mosquitto:2` Docker container, not a
+production Home Assistant instance, but a real MQTT implementation, not a
+mock) - `mosquitto_pub`-equivalent publishes to `<prefix>/text` and
+`<prefix>/image` both round-tripped correctly: banner/image appeared,
+woke a blanked display, counted as activity, and reverted to the actual
+prior marquee content (verified by pushing a real `CMDCORC` picture over
+WS first, then triggering notifications, confirming revert restored that
+exact picture) after the configured duration - repeated successfully
+multiple times after all fixes landed.
+
 ## Planned: full-color marquee support (deferred)
 
 Current priority is **hardware bring-up** (firmware flashed + verified on
@@ -834,6 +948,71 @@ grayscale pack" (2026-08-12):
 When this work resumes: reuse tty2tft's fallback-matching pattern in the
 web app's arcade auto-match, and revisit which external source (if any)
 to pull real color art from - that choice was explicitly not made yet.
+
+### Follow-up research (2026-08-13): still no public art catalog, still unresolved
+
+Re-checked with the WiFi/WS work now in place, since a device-side pull
+feature would only be worth it if a real source existed to point it at.
+Confirmed via the actual tty2tft source (`Code/MiSTer_tty2tft.ino`,
+GitHub) and forum research, not just recollection:
+
+- tty2tft is small/niche by GitHub metrics (13 stars, 3 forks, archived
+  since 2025-04-23) but had real community discussion (9+ forum pages) -
+  GitHub stars undersell MiSTer-community project usage generally.
+- Its actual mechanism: config from a plain-text `wifi.txt` on the SD
+  card (SSID/pass/base URL/timeout/country, one per line); on `CMDCOR`,
+  it checks the SD card first (same shortened-name/`_alt` matching as
+  above), and only falls back to an `HTTPClient` GET
+  (`baseURL + folderjpg + dirletter + filename`) when nothing local
+  matches - fetched images are cached permanently to SD, so it's a
+  "local library with lazy-fill fallback," not continuous streaming. A
+  separate always-on FTP server (hardcoded `esp32`/`esp32`) handles bulk
+  library management. `www.tty2tft.de` (the default repository URL in
+  its config) still 403s even a browser-UA `curl` - can't confirm what,
+  if anything, it actually serves.
+- Still **no real public catalog**: EmuMovies is subscription-gated, MAME
+  project marquee art is a legitimate free raw source but not
+  tty2tft-packaged, and a community member's "700 new pictures" for
+  `tty2rpi` was mentioned in a forum thread with no download link found.
+  The devs are explicit that they don't manage/bundle art - users source
+  and convert it themselves.
+
+**Design sketch for a device-side "pull on unknown core" feature**
+(discussed, not built - contingent on a catalog existing, which it
+doesn't yet):
+- Trigger: the existing bare-corename fallback branch in
+  `protocol_dispatch_line()` (not `CMDCOR`/`CMDAPD`, which are already
+  committed to "raw picture bytes follow immediately" by the legacy
+  protocol grammar - a stock `tty2oled.sh` only sends those when it
+  already has local art to send, so it never naturally emits a "no art,
+  please look it up" signal on its own; this would need either a
+  modified script - already anticipated as a future step, see "Known
+  gaps" below - or serve the web app's own flow rather than a real
+  MiSTer).
+- Catalog: an ordered list of base URLs in NVS (one delimited
+  `Preferences` string), tried in order via `HTTPClient` GET, same
+  `colorBuf`/`display_draw_jpeg()` draw path already used for `CMDCORC`.
+  No new RAM design needed - the fetch streams into the same static
+  buffer.
+- **Blocking requirement, not optional polish**: without an on-device
+  persistent cache, "a core we don't know" is meaningless - the device
+  has zero memory of anything shown across boots/pushes today, so every
+  single core selection would pay a network round-trip forever, which is
+  a bad experience for something as frequent as MiSTer core-switching.
+  LittleFS (flash headroom is fine, ~52% free) is the tractable option -
+  no SD card hardware needed - but is real, unbuilt work (custom
+  partition table, mount/read/write, a corename→file mapping) that
+  should ideally be written through by *both* the push path (`CMDCORC`)
+  and the pull path, so either one satisfies future lookups.
+- Remaining quality gap even with all the above solved: catalog images
+  would arrive full-rectangle with none of `editor.ts`'s round-safe
+  crop/fit applied (the device has no such transform, it just centers/
+  crops blind) - fine for a catalog curated specifically for this
+  round display, ugly for a generic rectangular one.
+
+Net: still blocked on "no catalog exists," same as before - this section
+just records that the pull-side design is otherwise sound and what it
+would take, so it isn't re-derived from scratch next time this comes up.
 
 ## Known gaps / follow-ups
 

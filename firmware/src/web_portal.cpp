@@ -7,15 +7,38 @@ namespace {
 // Minimal inline CSS/markup - same "embedded PROGMEM, no filesystem"
 // approach as chromecast-esp32/src/web_server.h's _handleRoot(). Kept
 // deliberately small: this page's only job is WiFi setup, not the full
-// marquee editor (that's web/, over WebSerial).
+// marquee editor (that's web/, over WebSerial). Dark theme with the same
+// purple/teal accent pairing as the web app's own header
+// (web/src/style.css's gradient title), so the two feel like the same
+// project instead of a stock plain-HTML form.
 const char PAGE_HEAD[] PROGMEM =
     "<!DOCTYPE html><html><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
     "<title>tty2oled setup</title>"
-    "<style>body{font-family:sans-serif;max-width:420px;margin:2em auto;padding:0 1em}"
-    "h1{font-size:1.2em}input{width:100%;box-sizing:border-box;padding:.5em;margin:.3em 0}"
-    "button{padding:.6em 1em;margin-top:.5em}"
-    ".muted{color:#666;font-size:.9em}</style></head><body>";
+    "<style>"
+    ":root{--bg:#14141c;--card:#1e1e2a;--border:#33334a;--text:#e8e8f0;"
+    "--muted:#9494ab;--accent:#8b6bff;--accent2:#3fd9c7;--danger:#ff6b6b}"
+    "*{box-sizing:border-box}"
+    "body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;max-width:440px;"
+    "margin:2em auto;padding:0 1em;background:var(--bg);color:var(--text)}"
+    "h1{font-size:1.3em;margin:1.4em 0 .4em;background:linear-gradient(90deg,var(--accent),var(--accent2));"
+    "-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700}"
+    "h1:first-of-type{margin-top:0}"
+    "label{display:block;margin-top:.7em;font-size:.85em;color:var(--muted)}"
+    "input,select{width:100%;padding:.55em;margin-top:.25em;background:var(--card);"
+    "border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:1em}"
+    "input:focus,select:focus{outline:none;border-color:var(--accent)}"
+    "input[type=checkbox]{width:auto;margin:0 .4em 0 0;vertical-align:middle}"
+    "button{padding:.65em 1.2em;margin-top:1em;background:var(--accent);color:#fff;"
+    "border:none;border-radius:6px;font-size:1em;cursor:pointer;transition:background .15s}"
+    "button:hover{background:#7857f5}"
+    "button.danger{background:var(--danger)}"
+    "button.danger:hover{background:#e85555}"
+    "p{line-height:1.5}"
+    "code{background:var(--card);border:1px solid var(--border);border-radius:4px;"
+    "padding:.1em .4em;font-size:.9em;color:var(--accent2)}"
+    ".muted{color:var(--muted);font-size:.9em}"
+    "</style></head><body>";
 
 const char PAGE_TAIL[] PROGMEM = "</body></html>";
 
@@ -48,6 +71,11 @@ void WebPortal::begin(WifiConfigStore *config, bool apMode) {
     _server.onNotFound([this]() { handleRoot(); }); // captive portal
   }
   _server.begin();
+}
+
+void WebPortal::setMqttConfig(MqttConfigStore *mqttConfig) {
+  _mqttConfig = mqttConfig;
+  _server.on("/mqtt-save", HTTP_POST, [this]() { handleMqttSave(); });
 }
 
 void WebPortal::startCaptiveDns(IPAddress apIp) {
@@ -104,8 +132,33 @@ void WebPortal::handleRoot() {
             "<p>IP: " + WiFi.localIP().toString() + "</p>"
             "<p class='muted'>Firmware " FW_VERSION " &middot; " REPO_URL "</p>"
             "<form method='POST' action='/reset' onsubmit=\"return confirm('Forget WiFi and restart into setup mode?');\">"
-            "<button type='submit'>Forget WiFi</button>"
+            "<button type='submit' class='danger'>Forget WiFi</button>"
             "</form>";
+
+    if (_mqttConfig) {
+      const MqttConfig &m = _mqttConfig->cfg;
+      body += "<h1>MQTT notifications</h1>"
+              "<p class='muted'>Subscribe to <code>&lt;prefix&gt;/text</code> and "
+              "<code>&lt;prefix&gt;/image</code> (an image URL) on a broker - e.g. "
+              "Home Assistant's Mosquitto add-on.</p>"
+              "<form method='POST' action='/mqtt-save'>"
+              "<label><input type='checkbox' name='enabled' value='1'"
+              + String(m.enabled ? " checked" : "") + "> Enabled</label>"
+              "<label>Broker host</label>"
+              "<input name='host' maxlength='63' value='" + htmlEscape(m.host) + "'>"
+              "<label>Port</label>"
+              "<input name='port' type='number' min='1' max='65535' value='" + String(m.port) + "'>"
+              "<label>Username (optional)</label>"
+              "<input name='username' maxlength='31' value='" + htmlEscape(m.username) + "'>"
+              "<label>Password (optional)</label>"
+              "<input name='password' type='password' maxlength='31' value='" + htmlEscape(m.password) + "'>"
+              "<label>Topic prefix (blank = tty2oled/&lt;device name&gt;)</label>"
+              "<input name='topicPrefix' maxlength='47' value='" + htmlEscape(m.topicPrefix) + "'>"
+              "<label>Notification duration (ms)</label>"
+              "<input name='durationMs' type='number' min='1000' max='60000' value='" + String(m.durationMs) + "'>"
+              "<button type='submit'>Save MQTT settings</button>"
+              "</form>";
+    }
   }
 
   body += FPSTR(PAGE_TAIL);
@@ -145,6 +198,37 @@ void WebPortal::handleReset() {
   body += FPSTR(PAGE_TAIL);
   _server.send(200, "text/html", body);
 
+  delay(300);
+  ESP.restart();
+}
+
+void WebPortal::handleMqttSave() {
+  MqttConfig &m = _mqttConfig->cfg;
+  m.enabled = _server.hasArg("enabled");
+  strncpy(m.host, _server.arg("host").c_str(), sizeof(m.host) - 1);
+  m.host[sizeof(m.host) - 1] = '\0';
+  m.port = (uint16_t)_server.arg("port").toInt();
+  if (m.port == 0) m.port = 1883;
+  strncpy(m.username, _server.arg("username").c_str(), sizeof(m.username) - 1);
+  m.username[sizeof(m.username) - 1] = '\0';
+  strncpy(m.password, _server.arg("password").c_str(), sizeof(m.password) - 1);
+  m.password[sizeof(m.password) - 1] = '\0';
+  strncpy(m.topicPrefix, _server.arg("topicPrefix").c_str(), sizeof(m.topicPrefix) - 1);
+  m.topicPrefix[sizeof(m.topicPrefix) - 1] = '\0';
+  m.durationMs = (uint16_t)_server.arg("durationMs").toInt();
+  if (m.durationMs < 1000) m.durationMs = 8000;
+  _mqttConfig->save();
+
+  String body;
+  body += FPSTR(PAGE_HEAD);
+  body += "<h1>MQTT settings saved</h1><p>Restarting to apply&hellip;</p>";
+  body += FPSTR(PAGE_TAIL);
+  _server.send(200, "text/html", body);
+
+  // Simplest reliable way to apply new broker settings - mqtt_client.cpp
+  // only reads MqttConfigStore once, at mqtt_client_init(). A restart is
+  // cheap here (device is already on WiFi, reconnects immediately) and
+  // avoids adding a second "re-init the MQTT client live" code path.
   delay(300);
   ESP.restart();
 }

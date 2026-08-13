@@ -563,10 +563,20 @@ void protocol_ws_xfer_finish() {
   wsXferActive = false;
 }
 
+void protocol_ws_xfer_finish_transient() {
+  if (!wsXferActive) return;
+  display_draw_jpeg_transient(colorBuf, wsXferTotal);
+  wsXferActive = false;
+}
+
 void protocol_ws_xfer_abort() {
   wsXferActive = false;
 }
 
 bool protocol_ws_xfer_in_progress() {
   return wsXferActive;
+}
+
+void protocol_redisplay_current(uint8_t effect) {
+  redisplayCurrent(effect);
 }
