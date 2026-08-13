@@ -29,6 +29,7 @@ constexpr int kOffY = 24;
 
 bool ready = false;
 uint8_t suspendCount = 0;
+bool blanked = false;
 unsigned long lastDraw = 0;
 constexpr unsigned long kRedrawIntervalMs = 100;
 
@@ -76,7 +77,7 @@ void oled_status_init() {
 }
 
 void oled_status_loop() {
-  if (!ready || suspendCount > 0) return;
+  if (!ready || suspendCount > 0 || blanked) return;
   if (millis() - lastDraw < kRedrawIntervalMs) return;
   lastDraw = millis();
   drawDashboard();
@@ -90,11 +91,24 @@ void oled_status_resume() {
   if (suspendCount > 0) suspendCount--;
 }
 
+void oled_status_off() {
+  if (!ready) return;
+  u8g2.clearBuffer();
+  u8g2.sendBuffer();
+  blanked = true;
+}
+
+void oled_status_on() {
+  blanked = false; // next oled_status_loop() redraws on its own ~100ms tick
+}
+
 #else // !HAS_ONBOARD_OLED
 
 void oled_status_init() {}
 void oled_status_loop() {}
 void oled_status_suspend() {}
 void oled_status_resume() {}
+void oled_status_off() {}
+void oled_status_on() {}
 
 #endif

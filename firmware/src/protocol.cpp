@@ -465,6 +465,7 @@ void protocol_saver_check() {
     if (saverBlanked) {
       display_on();
       redisplayCurrent(0);
+      oled_status_on();
       saverBlanked = false;
     }
     return;
@@ -472,10 +473,12 @@ void protocol_saver_check() {
   bool shouldBlank = (millis() - lastWakeMs) >= saverIntervalMs;
   if (shouldBlank && !saverBlanked) {
     display_off();
+    oled_status_off(); // an always-on static dashboard burns in a real OLED over time
     saverBlanked = true;
   } else if (!shouldBlank && saverBlanked) {
     display_on();
     redisplayCurrent(0);
+    oled_status_on();
     saverBlanked = false;
   }
 }
