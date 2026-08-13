@@ -8,6 +8,9 @@
 // same as the original MiSTer-side shell script's
 // `read -d ";" ttyresponse < ${TTYDEVICE}`.
 
+import type { DeviceLink, ConnectionState } from "./deviceLink";
+export type { ConnectionState } from "./deviceLink";
+
 const BAUD_RATE = 115200;
 // Generous margin over the slowest legitimate transitionReveal() case
 // (fade at the "slow" preset: ~12 full-frame SPI pushes at the firmware's
@@ -30,9 +33,7 @@ const ACK_TIMEOUT_MS = 6000;
 const CHUNK_BYTES = 512;
 const CHUNK_DELAY_MS = 10;
 
-export type ConnectionState = "disconnected" | "connecting" | "connected";
-
-export class SerialLink extends EventTarget {
+export class SerialLink extends EventTarget implements DeviceLink {
   private port: SerialPort | null = null;
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;

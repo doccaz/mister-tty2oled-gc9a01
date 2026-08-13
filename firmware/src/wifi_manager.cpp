@@ -1,6 +1,7 @@
 #include "wifi_manager.h"
 #include "wifi_config.h"
 #include "web_portal.h"
+#include "ws_protocol.h"
 #include "display.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
@@ -55,6 +56,13 @@ void enterConnecting() {
 void enterConnected() {
   MDNS.begin(deviceName.c_str());
   MDNS.addService("http", "tcp", 80);
+  // Advertised separately from "http" so the web app's WiFi transport
+  // (or avahi-browse/dns-sd) can discover the command-protocol WebSocket
+  // port specifically, not just infer it from the fixed port 81 constant
+  // in ws_protocol.cpp/wifiLink.ts. "ws"/"tcp" isn't an IANA-registered
+  // service name, but is the common convention other WebSocket-based IoT
+  // devices already use for exactly this purpose.
+  MDNS.addService("ws", "tcp", 81);
 
   portal.begin(&configStore, false);
   portalStarted = true;
@@ -66,6 +74,10 @@ void enterConnected() {
   // portal were all already working. Confirmed via the mDNS/HTTP checks
   // (not the screen) before this call was added.
   display_show_wifi_connected(configStore.cfg.wifiSsid, WiFi.localIP().toString(), deviceName + ".local");
+
+  // WS command protocol is STA-mode only (see CLAUDE.md "Wire protocol
+  // over WiFi") - AP mode's only job is WiFi bootstrapping.
+  ws_protocol_init();
 
   state = WifiState::CONNECTED;
   stateEnteredMs = millis();

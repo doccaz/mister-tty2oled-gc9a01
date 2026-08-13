@@ -3,6 +3,7 @@
 #include "protocol.h"
 #include "oled_status.h"
 #include "wifi_manager.h"
+#include "ws_protocol.h"
 
 // TEMP: hardware stability self-test - cycles solid colors + text via the
 // same fillScreenFast()/pushRect() code paths used by real rendering,
@@ -45,5 +46,6 @@ void loop() {
   protocol_saver_check();
   oled_status_loop();
   wifi_manager_loop();
+  ws_protocol_loop();
 #endif
 }
