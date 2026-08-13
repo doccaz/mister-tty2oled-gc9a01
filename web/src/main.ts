@@ -204,6 +204,7 @@ function renderEditorPanel(core: CoreDef) {
     <div class="controls-row">
       <button id="save-btn">Save to library</button>
       <button id="send-btn">Send to device</button>
+      <label class="hint"><input type="checkbox" id="blank-first-checkbox" checked /> blank first</label>
     </div>
     <p class="hint">Drag to pan, scroll to zoom. The dimmed ring shows what falls outside the round glass (round displays only). Changes preview live on the device while connected.</p>
   `;
@@ -697,6 +698,11 @@ function currentSpeedMs(): number {
   return preset?.durationMs ?? DEFAULT_SPEED.durationMs;
 }
 
+function blankFirstEnabled(): boolean {
+  const cb = editorPanel.querySelector("#blank-first-checkbox") as HTMLInputElement | null;
+  return cb?.checked ?? false;
+}
+
 async function sendPreview(core: CoreDef, force: boolean) {
   if (!editor?.hasImage()) return;
   if (!force && link.state !== "connected") return;
@@ -705,6 +711,17 @@ async function sendPreview(core: CoreDef, force: boolean) {
     return;
   }
   try {
+    // transitionReveal() on the firmware only ever writes new pixels over
+    // whatever's already on the physical screen (it never clears first,
+    // matching the original tty2oled's own behavior - see CLAUDE.md) - so
+    // re-sending pixel-identical content with a different effect shows no
+    // visible transition at all. Clearing first (explicit "Send to
+    // device" clicks only, not the debounced live pan/zoom preview, which
+    // would otherwise flash on every drag) makes effect changes always
+    // visible when evaluating them here.
+    if (force && blankFirstEnabled()) {
+      await link.sendCommand("CMDCLS");
+    }
     if (currentProfile.colorArt) {
       const bytes = await editor.exportJpeg();
       await link.sendColorArt(core.id, currentEffect(), currentSpeedMs(), bytes);

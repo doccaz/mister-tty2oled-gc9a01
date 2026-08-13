@@ -459,6 +459,26 @@ corner (`.github-ribbon` in `style.css`) - built from scratch rather than
 reusing the common SVG-icon ribbon snippet, to avoid pulling in art of
 uncertain provenance.
 
+### "Blank first" checkbox (2026-08-13)
+
+The editor panel's "Send to device" row has a "blank first" checkbox
+(`#blank-first-checkbox`, checked by default) - when checked, an explicit
+"Send to device" click sends `CMDCLS` before the picture. Exists because
+`transitionReveal()` on the firmware only ever writes new pixels over
+whatever's already on the physical screen (never clears first,
+deliberately matching the original tty2oled's own behavior - see
+`CMDSPIC` above) - so re-sending pixel-identical content with only the
+effect changed shows no visible transition at all, which is confusing
+when using this button specifically to evaluate different effects.
+Deliberately scoped to explicit sends only, not `scheduleLivePreview()`'s
+debounced auto-send during pan/zoom - clearing on every drag update would
+flash distractingly. Root-caused on real hardware 2026-08-13: three
+back-to-back `CMDCORC` sends of the *same* JPEG with different effects
+showed a transition only on the first (screen already matched); the same
+sends with three *different* JPEGs showed all three transitions
+correctly, confirming the framebuffer-reveal design was working exactly
+as intended, not a bug.
+
 ## Planned: full-color marquee support (deferred)
 
 Current priority is **hardware bring-up** (firmware flashed + verified on
