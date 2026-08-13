@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "display.h"
 #include "protocol.h"
+#include "oled_status.h"
 
 // TEMP: hardware stability self-test - cycles solid colors + text via the
 // same fillScreenFast()/pushRect() code paths used by real rendering,
@@ -27,11 +28,13 @@ void setup() {
   protocol_init(); // sends "ttyrdy;" once Serial is ready
   display_init();
   display_show_start_screen();
+  oled_status_init();
 #endif
 }
 
 void loop() {
 #if !RUN_SELF_TEST
   protocol_process();
+  oled_status_loop();
 #endif
 }
