@@ -527,10 +527,14 @@ to pull real color art from - that choice was explicitly not made yet.
   about, and the reduced RAM headroom (see "RAM headroom" above) held up.
 - **`CMDCORC` JPEG rendering is verified end-to-end on real hardware**
   (2026-08-12, re-confirmed 2026-08-13 with the OLED active and the new
-  protocol commands in place): JPEGs transferred, decoded, and rendered
-  correctly with wipe/iris/fade transition effects. Legacy `CMDCOR`/
-  `CMDAPD` grayscale rendering over the wire still hasn't been exercised
-  on real hardware yet (only `CMDCLST`'s reuse of the same
+  protocol commands in place): JPEGs transfer and decode correctly. All
+  six transition effects (wipe ×3, iris, fade, instant) are now
+  individually verified correct on real hardware (2026-08-13) - three of
+  them (wipe left→right, wipe right→left, iris) had real bugs before that
+  (see "transitionReveal() pushRect stride bug" above) that this specific
+  wording previously glossed over as just "wipe/iris/fade" working.
+  Legacy `CMDCOR`/`CMDAPD` grayscale rendering over the wire still hasn't
+  been exercised on real hardware yet (only `CMDCLST`'s reuse of the same
   `display_draw_legacy_gsc()` draw path, and the web app's local canvas
   preview / unit-level reasoning for the actual byte transfer).
 - **New protocol commands verified end-to-end on real hardware
@@ -600,3 +604,47 @@ on hardware:
 `Serial.readBytes()` call to an explicit `yield()`-based read loop, since
 `Stream::readBytes()`'s busy-spin starves the FreeRTOS task that feeds
 bytes from USB hardware into HWCDC's queue on this single-core chip.
+
+### transitionReveal() pushRect stride bug + per-row transaction stall (found 2026-08-13)
+
+Reported by the user: wipe left→right showed visible artifacts while
+drawing; wipe right→left and iris didn't work at all; fade and instant
+were fine; the web app's own local canvas preview of the same effects
+was unaffected. That last detail pointed straight at `display.cpp`'s
+`transitionReveal()`/`gc9a01.cpp`'s `pushRect()` - firmware-only, nothing
+wrong with the effect logic itself. Two independent bugs, both in
+`GC9A01Display::pushRect()`:
+
+1. **Stride bug (the artifacts)**: `pushRect(x, y, w, h, data)` read
+   `w*h` pixels from `data` assuming it was a densely-packed `w`-wide
+   buffer. `display.cpp`'s `g_frame` is always 240 pixels wide -
+   `transitionReveal()`'s left→right wipe calls
+   `pushRect(0, 0, w, DISP_H, g_frame)` with `w < 240` during the
+   animation, so every row after the first read starting `240-w` pixels
+   too early, into the *previous* row's trailing pixels - visible as
+   exactly the kind of artifact reported. The top→bottom wipe and
+   full-frame draws were never affected: they always pass `w == 240`,
+   which happens to equal `g_frame`'s real stride, so the bug was silent
+   there. Fixed by adding a `srcStride` parameter (default `w`, so
+   existing full-width/single-row callers are unaffected) and having
+   every partial-width caller pass `g_frame`'s real width (`DISP_W`)
+   explicitly.
+2. **Per-row transaction stall (the "doesn't work" effects)**: the
+   right→left wipe and the iris effect pushed one row at a time in a
+   loop (`for y: gfx.pushRect(x0, y, w, 1, ...)`), and `pushRect()` opens
+   and closes a *full* SPI transaction (`SPI.beginTransaction()`/CS
+   toggle/`SPI.endTransaction()`) on every call - up to 240 separate
+   transactions per animation step, on hardware this project has already
+   found to be sensitive to exactly this class of timing issue (see the
+   `CMDCORC` bring-up bugs above). Fixed by adding
+   `beginBatch()`/`pushRectBatched()`/`endBatch()`: one transaction/CS-low
+   span wraps the whole per-row loop, and `pushRectBatched()` only issues
+   the (cheap) address-window command per row instead of a full
+   transaction. The right→left wipe no longer needs a per-row loop at
+   all once the stride fix lets it collapse into one
+   `pushRect(x0, 0, w, DISP_H, &g_frame[x0], DISP_W)` call; only iris still
+   loops per row, since its visible x-range genuinely differs per row
+   (circular mask), but now inside one batch.
+
+All six effects (wipe ×3, iris, fade, instant) re-verified individually
+on real hardware after the fix.

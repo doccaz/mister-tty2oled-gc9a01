@@ -100,7 +100,11 @@ void transitionReveal(uint8_t effect, uint16_t durationMs) {
       for (int s = 1; s <= steps; s++) {
         uint32_t t0 = millis();
         int w = (DISP_W * s) / steps;
-        gfx.pushRect(0, 0, w, DISP_H, g_frame);
+        // srcStride=DISP_W required here: g_frame's real row width (240)
+        // is wider than this partial-width slice (w), so each row after
+        // the first must skip the leftover (240-w) pixels to stay
+        // aligned - omitting it was a real bug (see CLAUDE.md).
+        gfx.pushRect(0, 0, w, DISP_H, g_frame, DISP_W);
         stepDelay(t0, stepMs);
       }
       break;
@@ -110,9 +114,11 @@ void transitionReveal(uint8_t effect, uint16_t durationMs) {
         uint32_t t0 = millis();
         int w = (DISP_W * s) / steps;
         int x0 = DISP_W - w;
-        for (int y = 0; y < DISP_H; y++) {
-          gfx.pushRect(x0, y, w, 1, &g_frame[y * DISP_W + x0]);
-        }
+        // One stride-aware call instead of a 240-row loop (each iteration
+        // of which used to pay a full SPI transaction's setup/teardown
+        // cost) - same fix as case 1, plus the performance fix that
+        // stopped this effect from stalling on real hardware.
+        gfx.pushRect(x0, 0, w, DISP_H, &g_frame[x0], DISP_W);
         stepDelay(t0, stepMs);
       }
       break;
@@ -121,7 +127,7 @@ void transitionReveal(uint8_t effect, uint16_t durationMs) {
       for (int s = 1; s <= steps; s++) {
         uint32_t t0 = millis();
         int h = (DISP_H * s) / steps;
-        gfx.pushRect(0, 0, DISP_W, h, g_frame);
+        gfx.pushRect(0, 0, DISP_W, h, g_frame, DISP_W); // w==DISP_W already, but explicit for clarity
         stepDelay(t0, stepMs);
       }
       break;
@@ -135,14 +141,22 @@ void transitionReveal(uint8_t effect, uint16_t durationMs) {
         float r = maxR * s / steps;
         int yStart = max(0, (int)(cy - r));
         int yEnd = min(DISP_H - 1, (int)(cy + r));
+        // The visible x-range differs per row (circular mask), so unlike
+        // the wipes this can't collapse into one pushRect() call - but
+        // wrapping the per-row calls in one beginBatch()/endBatch() still
+        // avoids paying a full SPI transaction's setup/teardown per row,
+        // which was expensive enough to stall this effect on real
+        // hardware (see CLAUDE.md).
+        gfx.beginBatch();
         for (int y = yStart; y <= yEnd; y++) {
           float dy = y - cy;
           float dxf = sqrtf(max(0.0f, r * r - dy * dy));
           int x0 = max(0, (int)(cx - dxf));
           int x1 = min(DISP_W - 1, (int)(cx + dxf));
           int w = x1 - x0 + 1;
-          if (w > 0) gfx.pushRect(x0, y, w, 1, &g_frame[y * DISP_W + x0]);
+          if (w > 0) gfx.pushRectBatched(x0, y, w, 1, &g_frame[y * DISP_W + x0]);
         }
+        gfx.endBatch();
         stepDelay(t0, stepMs);
       }
       break;
