@@ -26,7 +26,10 @@ String buildDeviceName() {
 }
 
 void enterApMode() {
-  WiFi.mode(WIFI_AP);
+  // AP_STA, not plain AP: WiFi.scanNetworks() (the setup form's "Scan for
+  // networks" button, see web_portal.cpp's handleScan()) needs the STA
+  // interface active to scan at all - a pure AP-mode scan just fails.
+  WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(deviceName.c_str()); // open network, confirmed with user
   delay(100);
   IPAddress apIp = WiFi.softAPIP();
@@ -62,7 +65,7 @@ void enterConnected() {
   // "Connecting to <ssid>" text indefinitely even though WiFi/mDNS/the
   // portal were all already working. Confirmed via the mDNS/HTTP checks
   // (not the screen) before this call was added.
-  display_show_wifi_connected(configStore.cfg.wifiSsid, WiFi.localIP().toString());
+  display_show_wifi_connected(configStore.cfg.wifiSsid, WiFi.localIP().toString(), deviceName + ".local");
 
   state = WifiState::CONNECTED;
   stateEnteredMs = millis();

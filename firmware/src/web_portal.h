@@ -29,6 +29,7 @@ class WebPortal {
   void handleSave();
   void handleReset();
   void handleStatus();
+  void handleScan(); // AP mode only: WiFi.scanNetworks(), returns JSON for the setup form's dropdown
 
   WebServer _server{80};
   DNSServer _dns;

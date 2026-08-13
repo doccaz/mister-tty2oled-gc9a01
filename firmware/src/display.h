@@ -29,7 +29,7 @@ void display_show_sysinfo(const String &fwVersion); // CMDSHSYSHW
 // AP - takes no arguments, it remembers the ssid/ip itself.
 void display_show_ap_mode(const String &ssid, const String &ip);
 void display_show_connecting_wifi(const String &ssid);
-void display_show_wifi_connected(const String &ssid, const String &ip);
+void display_show_wifi_connected(const String &ssid, const String &ip, const String &hostname);
 void display_toggle_wifi_qr();
 
 // Text/geometry primitives for CMDTXT / CMDGEO compatibility
