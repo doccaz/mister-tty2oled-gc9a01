@@ -174,7 +174,26 @@ bool readExact(uint8_t *buf, size_t size, uint32_t timeoutMs = 5000) {
   return got == size;
 }
 
+// WS transfer state, shared with ws_protocol.cpp via protocol.h. Owned
+// here alongside colorBuf/lastPictureKind, which it draws into/updates on
+// completion - same static buffer the serial CMDCORC path uses, just
+// filled by small chunked appends instead of one blocking read.
+bool wsXferActive = false;
+String wsXferName;
+uint8_t wsXferEffect = 0;
+uint16_t wsXferDurationMs = 0;
+size_t wsXferTotal = 0;
+size_t wsXferReceived = 0;
+
 void handleLegacyPicture(const String &cmd, int prefixLen) {
+  if (wsXferActive) {
+    // A WS transfer spans multiple loop() iterations while chunks arrive
+    // (unlike this function's own single blocking read), so a serial
+    // CMDCOR/CMDAPD landing mid-transfer would race the shared legacyBuf -
+    // reject rather than corrupt it.
+    display_show_error("WiFi picture xfer in progress");
+    return;
+  }
   String rest = cmd.substring(prefixLen);
   int comma = rest.indexOf(',');
   int effect = -1;
@@ -203,6 +222,10 @@ void handleLegacyPicture(const String &cmd, int prefixLen) {
 // Length-prefixed by design (see readExact) - the legacy byte-count
 // classification trick doesn't work for variable-length JPEG.
 void handleColorPicture(const String &cmd) {
+  if (wsXferActive) {
+    display_show_error("WiFi picture xfer in progress");
+    return;
+  }
   DBG("handleColorPicture: free heap=%u cmd='%s' len=%u\n", (unsigned)ESP.getFreeHeap(), cmd.c_str(), (unsigned)cmd.length());
   String name = splitField(cmd, 1);
   int effect = splitField(cmd, 2).toInt();
@@ -230,7 +253,11 @@ void handleColorPicture(const String &cmd) {
   lastPictureKind = PictureKind::JPEG;
 }
 
-void dispatch(const String &cmd) {
+} // namespace
+
+// The shared command grammar - see protocol.h's declaration for why
+// CMDHWINF and the picture-transfer commands aren't part of this.
+void protocol_dispatch_line(const String &cmd) {
   if (cmd == "CMDNULL") {
     // no-op test command
   } else if (cmd == "cls" || cmd == "CMDCLS") {
@@ -382,8 +409,6 @@ void dispatch(const String &cmd) {
   }
 }
 
-} // namespace
-
 void protocol_init() {
   // The C3's native USB-CDC (HWCDC) defaults to a 256-byte RX queue -
   // nowhere near enough for a multi-KB CMDCORC JPEG burst; the ISR drops
@@ -434,9 +459,8 @@ void protocol_process() {
   if (line.length() == 0) return;
   DBG("dispatch line len=%u\n", (unsigned)line.length());
 
-  dispatch(line);
-  lastActivityMs = millis();
-  lastWakeMs = lastActivityMs;
+  protocol_dispatch_line(line);
+  protocol_note_activity();
 
   if (sendTTYACK) {
     delay(cDelay);
@@ -472,6 +496,11 @@ unsigned long protocol_last_activity_ms() {
   return lastActivityMs;
 }
 
+void protocol_note_activity() {
+  lastActivityMs = millis();
+  lastWakeMs = lastActivityMs;
+}
+
 void protocol_saver_check() {
   // No idle-blank during WiFi setup - the AP-status/QR screens should
   // stay up until the button is pressed or WiFi gets configured, not
@@ -498,4 +527,46 @@ void protocol_saver_check() {
     oled_status_on();
     saverBlanked = false;
   }
+}
+
+bool protocol_ws_xfer_begin(const String &name, uint8_t effect,
+                             uint16_t durationMs, size_t totalLen) {
+  if (wsXferActive || totalLen == 0 || totalLen > COLOR_BUF_MAX) return false;
+  wsXferActive = true;
+  wsXferName = name;
+  wsXferEffect = effect;
+  wsXferDurationMs = durationMs;
+  wsXferTotal = totalLen;
+  wsXferReceived = 0;
+  return true;
+}
+
+bool protocol_ws_xfer_append(const uint8_t *data, size_t len) {
+  if (!wsXferActive || wsXferReceived + len > wsXferTotal) {
+    protocol_ws_xfer_abort();
+    return false;
+  }
+  memcpy(colorBuf + wsXferReceived, data, len);
+  wsXferReceived += len;
+  return true;
+}
+
+bool protocol_ws_xfer_complete() {
+  return wsXferActive && wsXferReceived == wsXferTotal;
+}
+
+void protocol_ws_xfer_finish() {
+  if (!wsXferActive) return;
+  actCorename = wsXferName;
+  display_draw_jpeg(colorBuf, wsXferTotal, wsXferEffect, wsXferDurationMs);
+  lastPictureKind = PictureKind::JPEG;
+  wsXferActive = false;
+}
+
+void protocol_ws_xfer_abort() {
+  wsXferActive = false;
+}
+
+bool protocol_ws_xfer_in_progress() {
+  return wsXferActive;
 }

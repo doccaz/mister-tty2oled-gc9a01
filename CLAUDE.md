@@ -689,6 +689,113 @@ Both exactly the kind of thing this project's CLAUDE.md keeps emphasizing
   is already at 4 lines filling all ~40px of usable height, and adding a
   5th would mean redesigning the layout, not just appending a line.
 
+## Wire protocol over WiFi (WebSocket transport, 2026-08-13)
+
+The same `CMDxxx` command grammar the serial path speaks is now also
+reachable over the network, so the web app can drive the display without
+a USB cable from any machine on the LAN. Browsers can't open raw TCP
+sockets (only WebSocket/HTTP), so this is a **WebSocket server on port
+81** (`firmware/src/ws_protocol.h`/`.cpp`), started only once WiFi is
+in the `CONNECTED` (STA) state - AP mode's only job stays WiFi
+bootstrapping, matching the setup portal's existing scope cut.
+
+**RAM was the design constraint, not an afterthought.** `arduinoWebSockets`
+reassembles each binary frame into one contiguous heap allocation before
+handing it to the app, and the measured largest-allocatable-block budget
+(13.3KB, see the WiFi/AP feasibility table above) couldn't safely
+guarantee a whole 6-15KB JPEG frame at once - the same failure class as
+this project's own `malloc(40000)` bug. Rather than measure-and-hope, the
+art transfer (`CMDCORC` equivalent) is **chunked at the protocol layer
+from the start**: a text header frame (`CMDCORC,<name>,<effect>,
+<durationMs>,<totalLength>`) followed by the JPEG split into 2048-byte
+binary frames, each appended into the existing static `colorBuf`
+(`protocol.cpp`) at a running offset. Every single allocation the
+WebSockets library ever needs to make stays small and constant regardless
+of total JPEG size - the risk is designed out, not measured around.
+`web/src/wifiLink.ts`'s `sendColorArt()` does the client-side chunking to
+match.
+
+**Grammar is shared with the serial path, not duplicated.** `protocol.cpp`'s
+`dispatch()` was renamed to `protocol_dispatch_line()`, moved out of its
+anonymous namespace, and declared in `protocol.h` - both
+`protocol_process()` (serial) and `ws_protocol.cpp`'s WS handler call it
+for every command except `CMDHWINF` (writes a reply directly to `Serial`
+in the shared function, so the WS handler intercepts and replies on the
+socket instead) and the picture commands (each transport sources their
+bytes differently). A new `protocol_note_activity()` (touches both
+`lastActivityMs`/`lastWakeMs`) must be called by any transport dispatching
+a command, or `oled_status.cpp`'s RX indicator lies and the screensaver
+can blank mid-session under an active WiFi client - the same distinction
+this project's GPIO9 button code already had to get right.
+
+**Concurrent-transfer guard.** A WS transfer spans multiple `loop()`
+iterations while chunks arrive (unlike the serial path's single blocking
+`readExact()` call), so a serial `CMDCORC` landing mid-WS-transfer would
+race the shared `colorBuf` without a guard. `protocol_ws_xfer_begin()`
+rejects a second transfer outright, and `handleColorPicture()`/
+`handleLegacyPicture()` (serial) each gained one guard line checking
+`protocol_ws_xfer_in_progress()` before touching `colorBuf`/`legacyBuf` -
+the only change made to either function's body.
+
+**No legacy XBM/GSC transfer over WS** - that grammar exists for real-
+MiSTer-over-serial compatibility, which doesn't apply to a WS client (the
+web app only ever produces JPEG art). `WifiLink.sendLegacyPicture()`
+throws rather than attempting it.
+
+### Web app (`web/src/`)
+
+`deviceLink.ts` defines the `DeviceLink` interface both `SerialLink`
+(unchanged behavior, now `implements DeviceLink`) and the new `WifiLink`
+satisfy - `main.ts`'s send/preview code only depends on this shape, not
+on which transport is active. `main.ts` gained a header transport
+selector (`USB (WebSerial)` / `WiFi`) plus a host field (persisted via
+`localStorage`); switching transport disconnects the old one and swaps
+`link` to a fresh instance, re-attaching the one "permanent" listener
+(`statechange` → `renderConnectionState`) - short-lived listener
+pairs like the command console's already register/deregister within
+their own scope against whatever `link` was active when they opened, so
+they didn't need any special handling.
+
+### A PlatformIO/LDF gotcha worth remembering
+
+`links2004/WebSockets` unconditionally `#include`s `<WiFiClientSecure.h>`
+for the ESP32 target, even though this project never uses `wss://`.
+That header is a genuine framework-bundled library (same
+`framework-arduinoespressif32/libraries/` folder as `WiFi`/`Wire`/
+`DNSServer`, which all resolve automatically with no `lib_deps` entry) -
+but PlatformIO's LDF failed to find it **no matter where it was
+`#include`d from** (this project's own source, a bare `lib_deps` entry,
+`lib_ldf_mode = deep`/`deep+`) while every other bundled library kept
+resolving fine. Root cause not fully explained, but the working fix was
+`lib_extra_dirs = ${platformio.packages_dir}/framework-arduinoespressif32/libraries`
+in `platformio.ini` - pointing LDF straight at the folder sidesteps
+whatever the auto-discovery gap is for this one library.
+
+### Verified end-to-end on real hardware (2026-08-13)
+
+- Both `env:esp32c3`/`env:esp32c3_nooled` build clean at ~59.6-60.1%
+  static RAM with the WS stack included - comfortably inside the
+  ~58.4% post-fade-fix baseline, nowhere near the pre-fix 87% danger
+  zone.
+- A real WS client (both a Python test script and the actual `web/` app
+  in a browser) connected, sent plain commands (`CMDCLS`, `CMDTXT`),
+  `CMDHWINF` (replied correctly over the socket, not Serial), and
+  multiple full chunked `CMDCORC` transfers back-to-back (6-8KB JPEGs) -
+  all rendered correctly, `ttyack;` round-tripped every time, heap stayed
+  in a healthy 20-28KB range across the whole session with no leak or
+  crash.
+- `MDNS.addService("ws", "tcp", 81)` (alongside the existing `"http"`
+  service) confirmed advertised and resolvable via `avahi-browse`/
+  `dns-sd` - **note this only makes the service discoverable to tools
+  with real mDNS/Bonjour support, not to the browser-based web app
+  itself**: browsers have no JavaScript API for mDNS discovery, so
+  `wifiLink.ts` still requires the user to type in a host/IP either way.
+- A mid-session WiFi disconnect/reconnect was observed and recovered
+  from automatically (confirmed via the same real-hardware debug
+  capture) - `WifiLink`'s `ws.onclose` now also resolves any pending
+  `sendCommand()`/`sendColorArt()` ack wait immediately instead of
+  leaving the UI looking stuck for the full 6s ack timeout.
+
 ## Planned: full-color marquee support (deferred)
 
 Current priority is **hardware bring-up** (firmware flashed + verified on

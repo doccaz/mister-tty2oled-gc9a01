@@ -1,5 +1,7 @@
 import { SEED_CORES, type CoreDef } from "./cores";
 import { SerialLink, type ConnectionState } from "./serial";
+import { WifiLink } from "./wifiLink";
+import type { DeviceLink } from "./deviceLink";
 import { MarqueeEditor } from "./editor";
 import { loadAllCoreArt, saveCoreArt, type CoreArtRecord } from "./db";
 import { loadImportIndex, entryUrl, findAutoMatch, type ImportEntry } from "./importLibrary";
@@ -32,6 +34,13 @@ app.innerHTML = `
     <button id="review-matches-btn">Review core matches</button>
     <button id="command-console-btn">Command console</button>
     <button id="about-btn">About</button>
+    <label class="hint">transport
+      <select id="transport-select">
+        <option value="serial">USB (WebSerial)</option>
+        <option value="wifi">WiFi</option>
+      </select>
+    </label>
+    <input id="wifi-host-input" type="text" placeholder="tty2oled-XXXX.local" style="display:none">
     <span class="status-dot" id="status-dot"></span>
     <span id="status-text" class="hint">disconnected</span>
     <button id="connect-btn">Connect device</button>
@@ -42,7 +51,13 @@ app.innerHTML = `
   </main>
 `;
 
-const link = new SerialLink();
+// `link` can point at either transport - reassigned by setTransport() when
+// the header's transport selector changes. Kept as a single `let` (not a
+// stable wrapper object) since the only truly "permanent" listener is the
+// one statechange subscription below; everything else (e.g. the command
+// console's own listeners) is registered/torn down within its own
+// short-lived scope against whichever transport was active when it opened.
+let link: DeviceLink = new SerialLink();
 const artCache = new Map<string, CoreArtRecord>();
 let selectedCore: CoreDef | null = null;
 let editor: MarqueeEditor | null = null;
@@ -78,26 +93,61 @@ displaySelect.addEventListener("change", () => {
 const statusDot = document.getElementById("status-dot")!;
 const statusText = document.getElementById("status-text")!;
 const connectBtn = document.getElementById("connect-btn") as HTMLButtonElement;
+const transportSelect = document.getElementById("transport-select") as HTMLSelectElement;
+const wifiHostInput = document.getElementById("wifi-host-input") as HTMLInputElement;
+
+const WIFI_HOST_STORAGE_KEY = "tty2oled-wifi-host";
+wifiHostInput.value = localStorage.getItem(WIFI_HOST_STORAGE_KEY) ?? "";
 
 function renderConnectionState(state: ConnectionState) {
   statusDot.className = "status-dot " + state;
   statusText.textContent = state;
   connectBtn.textContent = state === "connected" ? "Disconnect" : "Connect device";
-  connectBtn.disabled = state === "connecting";
+  connectBtn.disabled = state === "connecting" || (transportSelect.value === "serial" && !SerialLink.isSupported());
 }
 
-link.addEventListener("statechange", (e) => renderConnectionState((e as CustomEvent).detail));
+function attachPermanentListeners(l: DeviceLink) {
+  l.addEventListener("statechange", (e) => renderConnectionState((e as CustomEvent).detail));
+}
+attachPermanentListeners(link);
 renderConnectionState(link.state);
 
-if (!SerialLink.isSupported()) {
-  connectBtn.disabled = true;
-  statusText.textContent = "Web Serial not supported - use Chrome or Edge";
+/** Swaps the active transport - called when the header's selector changes. */
+function setTransport(kind: "serial" | "wifi") {
+  if (link.state !== "disconnected") link.disconnect().catch(() => {});
+  link = kind === "serial" ? new SerialLink() : new WifiLink();
+  attachPermanentListeners(link);
+  renderConnectionState(link.state);
 }
+
+function updateTransportUI() {
+  const isWifi = transportSelect.value === "wifi";
+  wifiHostInput.style.display = isWifi ? "" : "none";
+  if (isWifi) {
+    statusText.textContent = link.state;
+  } else if (!SerialLink.isSupported()) {
+    statusText.textContent = "Web Serial not supported - use Chrome or Edge";
+  }
+}
+updateTransportUI();
+
+transportSelect.addEventListener("change", () => {
+  setTransport(transportSelect.value as "serial" | "wifi");
+  updateTransportUI();
+});
 
 connectBtn.addEventListener("click", async () => {
   try {
     if (link.state === "connected") {
       await link.disconnect();
+    } else if (transportSelect.value === "wifi") {
+      const host = wifiHostInput.value.trim();
+      if (!host) {
+        statusText.textContent = "Enter the device's hostname or IP";
+        return;
+      }
+      localStorage.setItem(WIFI_HOST_STORAGE_KEY, host);
+      await link.connect(host);
     } else {
       await link.connect();
     }
