@@ -4,7 +4,37 @@
 
 namespace {
 SPISettings spiSettings(10000000, MSBFIRST, SPI_MODE0);
+
+// Shared by pushRect()/pushRectBatched(): writes h rows of w RGB565
+// pixels each, reading row `r` starting at `data + r*srcStride` (not
+// `data + r*w` - see gc9a01.h's pushRect() comment for why that
+// distinction matters). Assumes the address window and DC=HIGH are
+// already set by the caller.
+void writeRectData(int16_t w, int16_t h, const uint16_t *data, int16_t srcStride) {
+  if (srcStride <= 0) srcStride = w;
+  // Chunked instead of one single transferBytes() call for the whole
+  // buffer: a single ~115KB (240x240) transfer blocks for a long enough
+  // stretch to trigger memory corruption on this hardware/core combo -
+  // found by testing against real hardware, isolated by freezing the
+  // firmware immediately after each stage of display_draw_jpeg() and
+  // observing corruption only ever appeared once pushRect() was reached.
+  // Small chunks with an explicit yield() between them avoid whatever the
+  // underlying issue is (starved USB-CDC ISR, watchdog-adjacent timing,
+  // or similar) without needing to root-cause the SPI/IDF internals.
+  constexpr size_t CHUNK_PIXELS = 512;
+  for (int16_t row = 0; row < h; row++) {
+    const uint8_t *rowBytes = reinterpret_cast<const uint8_t *>(data + (size_t)row * srcStride);
+    size_t rowBytesLen = (size_t)w * 2;
+    size_t offset = 0;
+    while (offset < rowBytesLen) {
+      size_t chunk = min(CHUNK_PIXELS * 2, rowBytesLen - offset);
+      SPI.transferBytes(rowBytes + offset, nullptr, chunk);
+      offset += chunk;
+      yield();
+    }
+  }
 }
+} // namespace
 
 void GC9A01Display::writeCommand(uint8_t cmd) {
   digitalWrite(PIN_LCD_DC, LOW);
@@ -144,31 +174,30 @@ void GC9A01Display::drawPixel(int16_t x, int16_t y, uint16_t color) {
   SPI.endTransaction();
 }
 
-void GC9A01Display::pushRect(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *data) {
+void GC9A01Display::pushRect(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *data, int16_t srcStride) {
   if (w <= 0 || h <= 0) return;
   SPI.beginTransaction(spiSettings);
   digitalWrite(PIN_LCD_CS, LOW);
   setAddrWindow(x, y, x + w - 1, y + h - 1);
   digitalWrite(PIN_LCD_DC, HIGH);
-  // Chunked instead of one single transferBytes() call for the whole
-  // buffer: a single ~115KB (240x240) transfer blocks for a long enough
-  // stretch to trigger memory corruption on this hardware/core combo -
-  // found by testing against real hardware, isolated by freezing the
-  // firmware immediately after each stage of display_draw_jpeg() and
-  // observing corruption only ever appeared once pushRect() was reached.
-  // Small chunks with an explicit yield() between them avoid whatever the
-  // underlying issue is (starved USB-CDC ISR, watchdog-adjacent timing,
-  // or similar) without needing to root-cause the SPI/IDF internals.
-  constexpr size_t CHUNK_PIXELS = 512;
-  const uint8_t *bytes = reinterpret_cast<const uint8_t *>(data);
-  size_t totalBytes = (size_t)w * h * 2;
-  size_t offset = 0;
-  while (offset < totalBytes) {
-    size_t chunk = min(CHUNK_PIXELS * 2, totalBytes - offset);
-    SPI.transferBytes(bytes + offset, nullptr, chunk);
-    offset += chunk;
-    yield();
-  }
+  writeRectData(w, h, data, srcStride);
+  digitalWrite(PIN_LCD_CS, HIGH);
+  SPI.endTransaction();
+}
+
+void GC9A01Display::beginBatch() {
+  SPI.beginTransaction(spiSettings);
+  digitalWrite(PIN_LCD_CS, LOW);
+}
+
+void GC9A01Display::pushRectBatched(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *data, int16_t srcStride) {
+  if (w <= 0 || h <= 0) return;
+  setAddrWindow(x, y, x + w - 1, y + h - 1);
+  digitalWrite(PIN_LCD_DC, HIGH);
+  writeRectData(w, h, data, srcStride);
+}
+
+void GC9A01Display::endBatch() {
   digitalWrite(PIN_LCD_CS, HIGH);
   SPI.endTransaction();
 }
