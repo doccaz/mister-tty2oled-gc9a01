@@ -28,8 +28,13 @@
 #define PIN_OLED_SCL 6
 
 // Onboard "BOOT" pushbutton, repurposed at runtime as a screensaver wake
-// button (protocol.cpp's protocol_button_check()). GPIO9 is a strapping
-// pin (pulled low at reset = download mode) - that only matters during
-// boot, not while running, so reading it as a plain input here is safe.
+// button, an AP-mode WiFi-QR toggle, and a factory-reset trigger when
+// held 10s continuously (all in protocol.cpp's protocol_button_check()).
+// GPIO9 is a strapping pin (pulled low at reset = download mode) - that
+// only matters during the reset/power-on instant, not while running, so
+// reading it as a plain input afterward is safe - but it also means the
+// factory-reset hold must start *after* boot, not across a physical
+// power-cycle/reset (holding it low through reset puts the ROM
+// bootloader into UART download mode instead of running the app at all).
 // Active-low: pressed = LOW.
 #define PIN_WAKE_BTN 9

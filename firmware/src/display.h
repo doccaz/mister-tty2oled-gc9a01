@@ -32,6 +32,13 @@ void display_show_connecting_wifi(const String &ssid);
 void display_show_wifi_connected(const String &ssid, const String &ip, const String &hostname);
 void display_toggle_wifi_qr();
 
+// Boot-time factory reset (hold GPIO9 for 10s at power-on, see
+// wifi_manager.cpp's checkFactoryResetHold()). secondsLeft counts down
+// from 10; display_show_factory_reset_done() is shown once the hold
+// completes and NVS has actually been cleared, right before restart.
+void display_show_factory_reset_hold(uint8_t secondsLeft);
+void display_show_factory_reset_done();
+
 // MQTT notification banner (see mqtt_client.h) - fills a banner region
 // and draws a single truncated line (no word wrap for v1). Does not
 // remember/restore prior content itself - mqtt_client.cpp's revert timer

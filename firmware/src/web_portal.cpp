@@ -1,5 +1,7 @@
 #include "web_portal.h"
 #include "version.h"
+#include "mqtt_client.h"
+#include "wifi_manager.h"
 #include <WiFi.h>
 
 namespace {
@@ -34,7 +36,15 @@ const char PAGE_HEAD[] PROGMEM =
     "button:hover{background:#7857f5}"
     "button.danger{background:var(--danger)}"
     "button.danger:hover{background:#e85555}"
+    "button.secondary{background:var(--card);border:1px solid var(--border);margin-left:.5em}"
+    "button.secondary:hover{background:#28283a}"
     "p{line-height:1.5}"
+    ".pwrow{display:flex;gap:.4em}"
+    ".pwrow input{flex:1}"
+    ".pwrow button{margin-top:.25em;padding:0 .7em;background:var(--card);"
+    "border:1px solid var(--border);color:var(--text)}"
+    ".pwrow button:hover{background:#28283a}"
+    "#mqttTestResult{display:inline-block;margin-top:1em;font-size:.9em}"
     "code{background:var(--card);border:1px solid var(--border);border-radius:4px;"
     "padding:.1em .4em;font-size:.9em;color:var(--accent2)}"
     ".muted{color:var(--muted);font-size:.9em}"
@@ -68,6 +78,7 @@ void WebPortal::begin(WifiConfigStore *config, bool apMode) {
   _server.on("/status", HTTP_GET, [this]() { handleStatus(); });
   if (_apMode) {
     _server.on("/scan", HTTP_GET, [this]() { handleScan(); });
+    _server.on("/wifi-test", HTTP_POST, [this]() { handleWifiTest(); });
     _server.onNotFound([this]() { handleRoot(); }); // captive portal
   }
   _server.begin();
@@ -76,6 +87,7 @@ void WebPortal::begin(WifiConfigStore *config, bool apMode) {
 void WebPortal::setMqttConfig(MqttConfigStore *mqttConfig) {
   _mqttConfig = mqttConfig;
   _server.on("/mqtt-save", HTTP_POST, [this]() { handleMqttSave(); });
+  _server.on("/mqtt-test", HTTP_POST, [this]() { handleMqttTest(); });
 }
 
 void WebPortal::startCaptiveDns(IPAddress apIp) {
@@ -104,10 +116,36 @@ void WebPortal::handleRoot() {
             "<label>WiFi network name (SSID)</label>"
             "<input name='ssid' id='ssid' maxlength='63' required>"
             "<label>Password</label>"
-            "<input name='pass' type='password' maxlength='63'>"
+            "<div class='pwrow'><input name='pass' id='wifiPass' type='password' maxlength='63'>"
+            "<button type='button' onclick=\"togglePw('wifiPass',this)\" title='Show/hide password'>&#128065;</button></div>"
+            "<button type='button' class='secondary' onclick='testWifi(this)'>Test connection</button>"
+            "<span id='wifiTestResult'></span>"
             "<button type='submit'>Save &amp; connect</button>"
             "</form>"
             "<script>"
+            "function togglePw(id,btn){"
+            "var el=document.getElementById(id);"
+            "var shown=el.type==='text';"
+            "el.type=shown?'password':'text';"
+            "btn.style.opacity=shown?1:.5"
+            "}"
+            "function testConn(url,body,resultId,btn){"
+            "var r=document.getElementById(resultId);"
+            "var origText=btn.textContent;"
+            "btn.disabled=true;btn.textContent='Testing...';"
+            "r.textContent='';"
+            "fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})"
+            ".then(function(resp){return resp.json()})"
+            ".then(function(j){r.textContent=j.ok?'\\u2713 Connected':'\\u2717 '+j.error;"
+            "r.style.color=j.ok?'var(--accent2)':'var(--danger)'})"
+            ".catch(function(){r.textContent='\\u2717 Request failed';r.style.color='var(--danger)'})"
+            ".finally(function(){btn.disabled=false;btn.textContent=origText})"
+            "}"
+            "function testWifi(btn){"
+            "var body='ssid='+encodeURIComponent(document.getElementById('ssid').value)"
+            "+'&pass='+encodeURIComponent(document.getElementById('wifiPass').value);"
+            "testConn('/wifi-test',body,'wifiTestResult',btn)"
+            "}"
             "function doScan(){"
             "var sel=document.getElementById('ssidList');"
             "sel.style.display='block';"
@@ -145,19 +183,50 @@ void WebPortal::handleRoot() {
               "<label><input type='checkbox' name='enabled' value='1'"
               + String(m.enabled ? " checked" : "") + "> Enabled</label>"
               "<label>Broker host</label>"
-              "<input name='host' maxlength='63' value='" + htmlEscape(m.host) + "'>"
+              "<input name='host' id='mqttHost' maxlength='63' value='" + htmlEscape(m.host) + "'>"
               "<label>Port</label>"
               "<input name='port' type='number' min='1' max='65535' value='" + String(m.port) + "'>"
               "<label>Username (optional)</label>"
               "<input name='username' maxlength='31' value='" + htmlEscape(m.username) + "'>"
               "<label>Password (optional)</label>"
-              "<input name='password' type='password' maxlength='31' value='" + htmlEscape(m.password) + "'>"
+              "<div class='pwrow'><input name='password' id='mqttPass' type='password' maxlength='31' value='"
+              + htmlEscape(m.password) + "'>"
+              "<button type='button' onclick=\"togglePw('mqttPass',this)\" title='Show/hide password'>&#128065;</button></div>"
               "<label>Topic prefix (blank = tty2oled/&lt;device name&gt;)</label>"
               "<input name='topicPrefix' maxlength='47' value='" + htmlEscape(m.topicPrefix) + "'>"
               "<label>Notification duration (ms)</label>"
               "<input name='durationMs' type='number' min='1000' max='60000' value='" + String(m.durationMs) + "'>"
+              "<button type='button' class='secondary' onclick='testMqtt(this)'>Test connection</button>"
+              "<span id='mqttTestResult'></span>"
               "<button type='submit'>Save MQTT settings</button>"
-              "</form>";
+              "</form>"
+              "<script>"
+              "function togglePw(id,btn){"
+              "var el=document.getElementById(id);"
+              "var shown=el.type==='text';"
+              "el.type=shown?'password':'text';"
+              "btn.style.opacity=shown?1:.5"
+              "}"
+              "function testConn(url,body,resultId,btn){"
+              "var r=document.getElementById(resultId);"
+              "var origText=btn.textContent;"
+              "btn.disabled=true;btn.textContent='Testing...';"
+              "r.textContent='';"
+              "fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})"
+              ".then(function(resp){return resp.json()})"
+              ".then(function(j){r.textContent=j.ok?'\\u2713 Connected':'\\u2717 '+j.error;"
+              "r.style.color=j.ok?'var(--accent2)':'var(--danger)'})"
+              ".catch(function(){r.textContent='\\u2717 Request failed';r.style.color='var(--danger)'})"
+              ".finally(function(){btn.disabled=false;btn.textContent=origText})"
+              "}"
+              "function testMqtt(btn){"
+              "var body='host='+encodeURIComponent(document.getElementById('mqttHost').value)"
+              "+'&port='+encodeURIComponent(document.querySelector('[name=port]').value)"
+              "+'&username='+encodeURIComponent(document.querySelector('[name=username]').value)"
+              "+'&password='+encodeURIComponent(document.getElementById('mqttPass').value);"
+              "testConn('/mqtt-test',body,'mqttTestResult',btn)"
+              "}"
+              "</script>";
     }
   }
 
@@ -231,6 +300,35 @@ void WebPortal::handleMqttSave() {
   // avoids adding a second "re-init the MQTT client live" code path.
   delay(300);
   ESP.restart();
+}
+
+void WebPortal::handleWifiTest() {
+  String ssid = _server.arg("ssid");
+  String pass = _server.arg("pass");
+
+  String error;
+  bool ok = wifi_manager_test_connection(ssid, pass, error);
+
+  String json = "{\"ok\":" + String(ok ? "true" : "false");
+  if (!ok) json += ",\"error\":\"" + htmlEscape(error) + "\"";
+  json += "}";
+  _server.send(200, "application/json", json);
+}
+
+void WebPortal::handleMqttTest() {
+  String host = _server.arg("host");
+  uint16_t port = (uint16_t)_server.arg("port").toInt();
+  if (port == 0) port = 1883;
+  String username = _server.arg("username");
+  String password = _server.arg("password");
+
+  String error;
+  bool ok = mqtt_client_test(host, port, username, password, error);
+
+  String json = "{\"ok\":" + String(ok ? "true" : "false");
+  if (!ok) json += ",\"error\":\"" + htmlEscape(error) + "\"";
+  json += "}";
+  _server.send(200, "application/json", json);
 }
 
 void WebPortal::handleScan() {

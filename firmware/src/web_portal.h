@@ -37,7 +37,9 @@ class WebPortal {
   void handleReset();
   void handleStatus();
   void handleScan(); // AP mode only: WiFi.scanNetworks(), returns JSON for the setup form's dropdown
+  void handleWifiTest(); // AP mode only: "Test connection" button - probes the form's current SSID/pass, doesn't save
   void handleMqttSave();
+  void handleMqttTest(); // "Test connection" button - tries the form's current values, doesn't save
 
   WebServer _server{80};
   DNSServer _dns;
