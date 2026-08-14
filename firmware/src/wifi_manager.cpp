@@ -142,6 +142,55 @@ bool wifi_manager_is_connected() {
   return state == WifiState::CONNECTED;
 }
 
+void wifi_manager_factory_reset() {
+  configStore.reset();
+  // A local, separate Preferences instance rather than reusing the
+  // file-scope mqttConfigStore - that one may already be begin()'d (see
+  // enterConnected()), and NVS handles are cheap/independent, so this
+  // avoids reasoning about double-begin() on the shared instance.
+  MqttConfigStore mqttConfig;
+  mqttConfig.begin();
+  mqttConfig.reset();
+  delay(500); // let display_show_factory_reset_done() actually show before restarting
+  ESP.restart();
+}
+
+// Redraws whatever this module considers "the current screen" - used by
+// protocol.cpp's long-press-cancel path to undo a factory-reset countdown
+// that didn't reach the full hold. Only AP_MODE has a screen protocol.cpp
+// doesn't already know how to restore itself (protocol_redisplay_current()
+// covers CONNECTED's marquee/corename content); CONNECTING's screen is
+// static text with nothing to preserve either way.
+void wifi_manager_redraw_screen() {
+  if (state == WifiState::AP_MODE) {
+    display_show_ap_mode(deviceName, WiFi.softAPIP().toString());
+  }
+}
+
+bool wifi_manager_test_connection(const String &ssid, const String &pass, String &errorOut) {
+  if (ssid.length() == 0) {
+    errorOut = "No SSID given";
+    return false;
+  }
+
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  unsigned long start = millis();
+  wl_status_t status;
+  while ((status = WiFi.status()) != WL_CONNECTED && millis() - start < 10000) {
+    delay(100);
+  }
+  bool ok = (status == WL_CONNECTED);
+  if (!ok) {
+    switch (status) {
+      case WL_NO_SSID_AVAIL: errorOut = "Network not found"; break;
+      case WL_CONNECT_FAILED: errorOut = "Wrong password or auth rejected"; break;
+      default: errorOut = "Timed out connecting"; break;
+    }
+  }
+  WiFi.disconnect(false, false); // drop the test association; AP/captive portal stays up either way
+  return ok;
+}
+
 const String &wifi_manager_device_name() {
   return deviceName;
 }

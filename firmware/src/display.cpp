@@ -681,6 +681,45 @@ void display_show_wifi_connected(const String &ssid, const String &ip, const Str
   gfx.print(hostname);
 }
 
+void display_show_factory_reset_hold(uint8_t secondsLeft) {
+  gfx.fillScreenFast(0x0000);
+  gfx.setTextColor(0xF800); // red - same warning color as display_show_error()
+  int16_t x1, y1;
+  uint16_t w, h;
+
+  gfx.setTextSize(1);
+  const char *title = "Factory reset";
+  gfx.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY - 40);
+  gfx.print(title);
+
+  gfx.setTextSize(3);
+  char secBuf[4];
+  snprintf(secBuf, sizeof(secBuf), "%u", secondsLeft);
+  gfx.getTextBounds(secBuf, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY - 5);
+  gfx.print(secBuf);
+
+  gfx.setTextSize(1);
+  const char *hint = "Release to cancel";
+  gfx.getTextBounds(hint, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY + 40);
+  gfx.print(hint);
+}
+
+void display_show_factory_reset_done() {
+  gfx.fillScreenFast(0x0000);
+  gfx.setTextColor(0xFFFF);
+  gfx.setTextSize(1);
+  int16_t x1, y1;
+  uint16_t w, h;
+  const char *msg = "Factory reset - restarting...";
+  gfx.getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
+  int16_t x = w > DISP_W - 20 ? 10 : DISP_CX - w / 2;
+  gfx.setCursor(x, DISP_CY);
+  gfx.print(msg);
+}
+
 void display_toggle_wifi_qr() {
   g_qrShown = !g_qrShown;
   if (g_qrShown) {

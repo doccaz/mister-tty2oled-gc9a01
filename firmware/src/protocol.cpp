@@ -468,6 +468,18 @@ void protocol_process() {
   }
 }
 
+// Factory reset: hold the wake button 10s continuously *during normal
+// operation* - not at power-on. GPIO9 is a strapping pin the ROM
+// bootloader samples at reset, so holding it low across an actual
+// reset/power-cycle puts the chip in UART download mode and the app
+// never runs at all (confirmed on real hardware: holding through power-on
+// produced a black screen, not a countdown - the app simply never
+// started). Tracking the hold here in the normal loop() instead sidesteps
+// that entirely, since by the time app code is running the strap sampling
+// window has already passed.
+constexpr unsigned long FACTORY_RESET_HOLD_MS = 10000;
+constexpr unsigned long FACTORY_RESET_UI_DELAY_MS = 1500; // don't flash the countdown on ordinary short presses
+
 void protocol_button_check() {
   bool pressed = (digitalRead(PIN_WAKE_BTN) == LOW);
 
@@ -485,6 +497,39 @@ void protocol_button_check() {
   if (pressed && !wasPressed && wifi_manager_is_ap_mode()) {
     display_toggle_wifi_qr();
   }
+
+  static unsigned long pressStartMs = 0;
+  static bool countdownShown = false;
+  static uint8_t lastSecShown = 0;
+
+  if (pressed && !wasPressed) {
+    pressStartMs = millis();
+  }
+
+  if (pressed) {
+    unsigned long held = millis() - pressStartMs;
+    if (held >= FACTORY_RESET_HOLD_MS) {
+      display_show_factory_reset_done();
+      wifi_manager_factory_reset(); // clears NVS + ESP.restart(), never returns
+    } else if (held >= FACTORY_RESET_UI_DELAY_MS) {
+      uint8_t secLeft = (FACTORY_RESET_HOLD_MS - held) / 1000 + 1;
+      if (secLeft != lastSecShown) {
+        display_show_factory_reset_hold(secLeft);
+        lastSecShown = secLeft;
+        countdownShown = true;
+      }
+    }
+  } else if (countdownShown) {
+    // Released before the full hold - undo the countdown screen.
+    if (wifi_manager_is_ap_mode()) {
+      wifi_manager_redraw_screen();
+    } else {
+      protocol_redisplay_current(0);
+    }
+    countdownShown = false;
+    lastSecShown = 0;
+  }
+
   wasPressed = pressed;
 }
 

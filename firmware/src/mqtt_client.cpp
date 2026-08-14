@@ -184,7 +184,48 @@ void reconnect() {
   }
 }
 
+// PubSubClient::state() codes -> short human-readable reason, for the
+// test-connection button's result message.
+const char *mqttStateStr(int state) {
+  switch (state) {
+    case -4: return "Timed out";
+    case -3: return "Connection lost";
+    case -2: return "Connect failed (host/port unreachable?)";
+    case -1: return "Disconnected";
+    case 1: return "Bad protocol version";
+    case 2: return "Client ID rejected";
+    case 3: return "Broker unavailable";
+    case 4: return "Bad username/password";
+    case 5: return "Not authorized";
+    default: return "Unknown error";
+  }
+}
+
 } // namespace
+
+bool mqtt_client_test(const String &host, uint16_t port, const String &username, const String &password, String &errorOut) {
+  if (host.length() == 0) {
+    errorOut = "No host given";
+    return false;
+  }
+
+  WiFiClient testWifiClient;
+  PubSubClient testMqtt(testWifiClient);
+  testMqtt.setServer(host.c_str(), port);
+  testMqtt.setSocketTimeout(3); // seconds - keep the web request responsive
+
+  String clientId = wifi_manager_device_name() + "-test";
+  bool ok = username.length() != 0
+                ? testMqtt.connect(clientId.c_str(), username.c_str(), password.c_str())
+                : testMqtt.connect(clientId.c_str());
+
+  if (ok) {
+    testMqtt.disconnect();
+    return true;
+  }
+  errorOut = mqttStateStr(testMqtt.state());
+  return false;
+}
 
 void mqtt_client_init() {
   configStore.begin();

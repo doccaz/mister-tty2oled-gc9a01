@@ -58,6 +58,11 @@ class MqttConfigStore {
     _prefs.putUShort("durationMs", cfg.durationMs);
   }
 
+  void reset() {
+    cfg.setDefaults();
+    _prefs.clear();
+  }
+
  private:
   Preferences _prefs;
 };
