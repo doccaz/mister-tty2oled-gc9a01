@@ -103,6 +103,19 @@ software reset instead). Verified working on real hardware:
 Build it with `pio run -e esp32c3_2424s012 --target upload`. The pins are
 selected by the `BOARD_2424S012` flag in `firmware/src/pins.h`.
 
+Verified on real hardware with this board:
+
+- Display init and the `CMDTEST` ring pattern render correctly.
+- `CMDHWINF` replies `HWGC9A01C;<version>;`.
+- Backlight PWM works: `CMDCON` at 128/64/16/0 visibly dims the screen
+  and `CMDCON,255` restores it.
+- A full-color `CMDCORC` JPEG transfer (4917 bytes, iris effect) over USB
+  decodes and displays correctly, and the firmware acks it.
+
+Not yet tested on this board: sending art through the web app's WebSerial
+path (the `CMDCORC` check above used a script speaking the same protocol),
+and the WiFi/MQTT features.
+
 ## Build & flash the firmware
 
 ```bash
