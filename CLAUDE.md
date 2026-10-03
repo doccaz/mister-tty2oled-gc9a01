@@ -1067,10 +1067,16 @@ would take, so it isn't re-derived from scratch next time this comes up.
   them (wipe left→right, wipe right→left, iris) had real bugs before that
   (see "transitionReveal() pushRect stride bug" above) that this specific
   wording previously glossed over as just "wipe/iris/fade" working.
-  Legacy `CMDCOR`/`CMDAPD` grayscale rendering over the wire still hasn't
-  been exercised on real hardware yet (only `CMDCLST`'s reuse of the same
-  `display_draw_legacy_gsc()` draw path, and the web app's local canvas
-  preview / unit-level reasoning for the actual byte transfer).
+  Legacy `CMDCOR` rendering over the wire is **now verified on real
+  hardware too** (2026-10-03, ESP32-2424S012C, over native USB-CDC): a
+  2048-byte 1bpp XBM (`NES.xbm`) and two 8192-byte 4bpp GSC files
+  (`C64.gsc`, `battroad.gsc`) from the local packs, sent with effects 1,
+  3, 4, 5 and -1 (random), each acked with `ttyack;` and visually
+  confirmed correct on the display (centered/letterboxed, no skew). Note
+  some pack files declare `_bits[8198]`/`[2054]` (6 extra header bytes) -
+  those must be stripped to exactly 8192/2048 before sending, since the
+  firmware classifies by byte count (`tools/convert_library.py` does the
+  same). `CMDAPD` shares the same handler path but wasn't sent separately.
 - **New protocol commands verified end-to-end on real hardware
   (2026-08-13)**: `CMDBYE`, `CMDTEST`, `CMDSHSYSHW`, `CMDHWINF` (reply
   format confirmed over the wire), `CMDCLST`, `CMDSPIC` (both JPEG- and
