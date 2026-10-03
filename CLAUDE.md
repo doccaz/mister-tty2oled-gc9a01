@@ -266,9 +266,11 @@ works). There is no reset GPIO (panel reset is tied to the board reset),
 so `gc9a01.cpp`'s `begin()` skips the RST pin when `PIN_LCD_RST < 0` and
 sends the `SWRESET` command (0x01) before the init sequence instead; the
 other envs still use the hardware reset pin unchanged. GPIO9 is the BOOT
-button here too, so the wake/QR/factory-reset behavior is unchanged. Not
-yet re-checked on this board: whether backlight PWM actually dims it
-(the "Backlight PWM has no effect" finding below was a different module).
+button here too, so the wake/QR/factory-reset behavior is unchanged. Backlight
+PWM on GPIO3 **works on this board** (verified on real hardware: stepping
+`CMDCON` 128/64/16/0 visibly dims the screen, `CMDCON,255` restores it) -
+unlike the "Backlight PWM has no effect" finding below, which was a
+different module.
 
 ### Onboard status OLED
 
