@@ -254,6 +254,22 @@ peripheral is fixed to GPIO18/19 in hardware and used automatically by
 `Serial` — never wired manually, and what both a real MiSTer and the
 WebSerial web app talk to.
 
+### Sunton ESP32-2424S012C all-in-one board (2026-10-02)
+
+Third build variant, `env:esp32c3_2424s012` (`-DBOARD_2424S012=1`,
+`HAS_ONBOARD_OLED=0`): a 1.28" round GC9A01 with an ESP32-C3-MINI-1U built
+onto the back, no touch variant. Display pins are fixed by the board and
+`pins.h` selects them under `BOARD_2424S012`: `SCLK=6, MOSI=7, CS=10,
+DC=2, BL=3, RST=-1`. The pin map came from memory of the Sunton pinout,
+not a schematic, and was then **verified on real hardware** (display
+works). There is no reset GPIO (panel reset is tied to the board reset),
+so `gc9a01.cpp`'s `begin()` skips the RST pin when `PIN_LCD_RST < 0` and
+sends the `SWRESET` command (0x01) before the init sequence instead; the
+other envs still use the hardware reset pin unchanged. GPIO9 is the BOOT
+button here too, so the wake/QR/factory-reset behavior is unchanged. Not
+yet re-checked on this board: whether backlight PWM actually dims it
+(the "Backlight PWM has no effect" finding below was a different module).
+
 ### Onboard status OLED
 
 `firmware/src/oled_status.h`/`.cpp` drives this board's built-in 0.42"
