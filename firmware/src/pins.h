@@ -13,12 +13,26 @@
 // UART (see protocol.cpp's DBG_ENABLED).
 // -----------------------------------------------------------------------
 
+#if defined(BOARD_2424S012)
+// Sunton ESP32-2424S012C (1.28" round, all-in-one ESP32-C3-MINI-1U board).
+// Display is soldered on, pins fixed by the board. RST is not routed to a
+// GPIO (tied to the board reset), so PIN_LCD_RST is -1 and gc9a01.cpp
+// uses the SWRESET command instead. Capacitive-touch variants wire
+// CST816S to GPIO0/1/4/5; this firmware doesn't use touch.
+#define PIN_LCD_SCLK 6
+#define PIN_LCD_MOSI 7
+#define PIN_LCD_CS   10
+#define PIN_LCD_DC   2
+#define PIN_LCD_RST  -1
+#define PIN_LCD_BL   3   // backlight, must be PWM (LEDC) capable
+#else
 #define PIN_LCD_SCLK 4
 #define PIN_LCD_MOSI 0
 #define PIN_LCD_CS   7
 #define PIN_LCD_DC   1
 #define PIN_LCD_RST  10
 #define PIN_LCD_BL   3   // backlight, must be PWM (LEDC) capable
+#endif
 
 // GC9A01 panels are write-only in this design; no MISO wiring needed.
 

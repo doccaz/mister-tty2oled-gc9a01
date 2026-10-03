@@ -65,18 +65,30 @@ void GC9A01Display::setAddrWindow(int16_t x0, int16_t y0, int16_t x1, int16_t y1
 void GC9A01Display::begin() {
   pinMode(PIN_LCD_CS, OUTPUT);
   pinMode(PIN_LCD_DC, OUTPUT);
-  pinMode(PIN_LCD_RST, OUTPUT);
+  if (PIN_LCD_RST >= 0) pinMode(PIN_LCD_RST, OUTPUT);
   digitalWrite(PIN_LCD_CS, HIGH);
 
   SPI.begin(PIN_LCD_SCLK, -1 /* MISO */, PIN_LCD_MOSI, PIN_LCD_CS);
 
-  digitalWrite(PIN_LCD_RST, LOW);
-  delay(20);
-  digitalWrite(PIN_LCD_RST, HIGH);
-  delay(120);
+  if (PIN_LCD_RST >= 0) {
+    digitalWrite(PIN_LCD_RST, LOW);
+    delay(20);
+    digitalWrite(PIN_LCD_RST, HIGH);
+    delay(120);
+  }
 
   SPI.beginTransaction(spiSettings);
   digitalWrite(PIN_LCD_CS, LOW);
+
+  if (PIN_LCD_RST < 0) {
+    // No reset GPIO on this board: fall back to the software reset command.
+    writeCommand(0x01);
+    digitalWrite(PIN_LCD_CS, HIGH);
+    SPI.endTransaction();
+    delay(120);
+    SPI.beginTransaction(spiSettings);
+    digitalWrite(PIN_LCD_CS, LOW);
+  }
 
   // GC9A01 vendor register-init sequence (see gc9a01.h header comment for provenance).
   writeCommand(0xEF);

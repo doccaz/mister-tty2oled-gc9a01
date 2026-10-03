@@ -76,12 +76,40 @@ app's WebSerial connection talk to; it's never wired manually. GPIO20/21
 are left free for an optional hardware debug UART (see `protocol.cpp`'s
 `DBG_ENABLED`).
 
+### All-in-one board: Sunton ESP32-2424S012C
+
+Also supported, and the simplest option: the Sunton **ESP32-2424S012C** is
+a 1.28" round GC9A01 240×240 IPS display with an ESP32-C3-MINI-1U built
+onto the back of it, USB-C, a reset and a BOOT button, and a battery
+connector. Nothing to wire. This variant has no capacitive touch (the
+firmware doesn't use touch anyway) and no status OLED.
+
+![ESP32-2424S012C board](docs/esp32-2424s012c.png)
+
+The display pins are fixed by the board, and there's no reset GPIO (the
+panel reset is tied to the board's reset, so the driver uses the GC9A01
+software reset instead). Verified working on real hardware:
+
+| Signal | GPIO |
+|---|---|
+| SCLK | 6 |
+| MOSI | 7 |
+| CS | 10 |
+| DC | 2 |
+| RST | none (software reset) |
+| BL (backlight, PWM) | 3 |
+| Wake button | 9 (the BOOT button) |
+
+Build it with `pio run -e esp32c3_2424s012 --target upload`. The pins are
+selected by the `BOARD_2424S012` flag in `firmware/src/pins.h`.
+
 ## Build & flash the firmware
 
 ```bash
 cd firmware
 pio run -e esp32c3 --target upload          # default: includes the onboard OLED
 pio run -e esp32c3_nooled --target upload   # board variant without the OLED
+pio run -e esp32c3_2424s012 --target upload # Sunton ESP32-2424S012C all-in-one board
 pio device monitor          # 115200 baud, watch for "ttyrdy;"
 ```
 
