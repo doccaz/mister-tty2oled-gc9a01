@@ -90,6 +90,27 @@ app's WebSerial connection talk to; it's never wired manually. GPIO20/21
 are left free for an optional hardware debug UART (see `protocol.cpp`'s
 `DBG_ENABLED`).
 
+### Discrete build: ESP32-C3 Super Mini + GC9A01 module
+
+The reference setup behind the pin table above: an ESP32-C3 **Super Mini**
+(the variant with the built-in 0.42" status OLED) wired by jumpers to a
+separate GC9A01 round display module. Build it with the default
+`pio run -e esp32c3 --target upload` (or `esp32c3_nooled` if your board has
+no OLED).
+
+![ESP32-C3 Super Mini wired to a GC9A01 round display, showing its WiFi "Connected" screen](docs/hw-gc9a01-connected.jpg)
+
+The round display on its "Connected" screen after joining WiFi (the
+network name and IP are blurred out in this photo; the `.local` hostname
+is the device's mDNS name).
+
+![ESP32-C3 Super Mini's onboard OLED status dashboard, with the GC9A01 module's back and jumper wiring](docs/hw-supermini-oled.jpg)
+
+Close-up of the Super Mini: the onboard 0.42" OLED shows the status
+dashboard (firmware version, core name, RX activity), and the back of the
+GC9A01 module (marked `M128-240240-RGB-7-V1.0`, `IC:GC9A01`) shows the
+jumper wiring from the pin table.
+
 ### All-in-one board: Sunton ESP32-2424S012C
 
 Also supported, and the simplest option: the Sunton **ESP32-2424S012C** is
