@@ -146,8 +146,12 @@ hardware (see `protocol.cpp`'s `dispatch()`):
   script re-sends it every start. `toInt()` is 32-bit `long`, so epochs
   past 2038 would overflow. The reference only uses its RTC for the
   Show Time/Date screensaver modes, which our `CMDSAVER` doesn't have, so
-  nothing shows the time unless `CMDSHTIME` is sent. Not yet tested on
-  real hardware.
+  nothing shows the time unless `CMDSHTIME` is sent. Verified on real
+  hardware 2026-10-10 (ESP32-2424S012C): a simulated `tty2oled.sh`
+  startup/core-change cycle (QWERTZ, CMDCON, CMDROT, CMDSETTIME,
+  CMDSAVER, CMDCOR + NES.xbm, CMDSHTIME, CMDSPIC, bare corename) was
+  acked on every line and the screens looked correct, including
+  "Time not set!" before the time arrives.
 - `CMDHWINF` — replies over `Serial` with `HW<id>;<version>;` (no
   trailing newline; `web/src/serial.ts` tokenizes on `;`, not `\n`, same
   as `ttyack;`/`ttyrdy;`). Our hardware id is `HWGC9A01C` — a new value
