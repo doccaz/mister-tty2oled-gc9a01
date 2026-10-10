@@ -27,7 +27,7 @@ cores):
 
 Full-color art (the extended `CMDCORC` command, sent by hand):
 
-![Full-color logo on the round display](docs/color-marquee.jpg)
+[![Full-color logo on the round display](docs/color-marquee.jpg)](docs/color-marquee-full.jpg)
 
 ## What's in this repo
 
