@@ -339,6 +339,41 @@ hardware-bring-up data, not as library code), and a fast `pushRect()`
 bulk blit for JPEG frames and transitions. It subclasses `Adafruit_GFX`
 only for its software text/shape routines.
 
+## Future implementations
+
+Nothing here is built yet; these are directions, not commitments.
+
+### Untethering the display from the MiSTer
+
+Today a real MiSTer drives the display over a USB cable, because that's
+the only transport `tty2oled.sh` speaks. The firmware already has the
+other half of a wireless setup: once it has joined your WiFi it serves
+the same command grammar over a WebSocket (see [Over WiFi](#over-wifi)),
+and the web app already uses it. What's missing is a MiSTer-side client
+so the cable can go away and the display can sit anywhere in range.
+
+Rough shape of what that would take:
+
+- **A small bridge on the MiSTer** that watches the same core-name file
+  `tty2oled.sh` does, opens a WebSocket to the display, and forwards the
+  startup commands (contrast, rotation, time, screensaver) and each core
+  change. The stock script only writes to a serial device, so this would
+  be a separate script or a transport option, not a change to the
+  upstream project.
+- **Legacy pictures over the socket.** Legacy `CMDCOR`/`CMDAPD` (raw
+  XBM/GSC) are deliberately not accepted over WebSocket today. For an
+  unmodified marquee library to work wirelessly, either the firmware
+  gains a chunked legacy-picture path, or the bridge converts those
+  pictures to the JPEG path before sending.
+- **Finding the display.** The device advertises `_ws._tcp` over mDNS,
+  but a MiSTer may not have a resolver for it, so the bridge would most
+  likely read a host or IP from its config file at first.
+- **Reconnects.** WiFi drops are normal, unlike a cable: the bridge would
+  need to reconnect and replay the current core so the display isn't left
+  stale after a router reboot.
+- **Mixed setups.** USB stays the default and keeps working unchanged;
+  wireless would be opt-in.
+
 ## License
 
 The code in this repository (`firmware/`, `web/`, `tools/`) is licensed
