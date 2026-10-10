@@ -8,3 +8,7 @@ web/tsconfig.tsbuildinfo
 # (see tools/build_library.sh) - not redistributed, regenerate locally.
 library/converted/
 web/public/library/
+
+# User-supplied full-color marquee art (e.g. trademarked logos) - merged into
+# the library by tools/build_library.sh, never committed.
+library/local-extra/

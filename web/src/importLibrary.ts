@@ -10,7 +10,7 @@ import { CORE_ALIASES } from "./aliases";
 export interface ImportEntry {
   pack: string;
   name: string;
-  kind: "gsc" | "xbm";
+  kind: "gsc" | "xbm" | "color";
   png: string; // relative path under /library/
 }
 

@@ -29,6 +29,28 @@ rm -rf "${ROOT}/library/converted"
 mkdir -p "${ROOT}/library/converted"
 python3 "${ROOT}/tools/convert_library.py" "${WORK_DIR}/extracted" "${ROOT}/library/converted"
 
+# Optional user-supplied full-color art (library/local-extra/*.png|jpg, named
+# after the core id, e.g. PSX.png). Gitignored like the packs above, so
+# third-party logos never land in the repo. Copied in as pack "local-extra".
+EXTRA_DIR="${ROOT}/library/local-extra"
+if compgen -G "${EXTRA_DIR}/*" >/dev/null; then
+  echo "Merging local-extra color art ..."
+  mkdir -p "${ROOT}/library/converted/local-extra"
+  python3 - "${EXTRA_DIR}" "${ROOT}/library/converted" <<'PY'
+import json, shutil, sys
+from pathlib import Path
+src, out = Path(sys.argv[1]), Path(sys.argv[2])
+idx_path = out / "index.json"
+idx = json.loads(idx_path.read_text())
+for f in sorted(src.iterdir()):
+    if f.suffix.lower() not in (".png", ".jpg", ".jpeg"):
+        continue
+    shutil.copy(f, out / "local-extra" / f.name)
+    idx.append({"pack": "local-extra", "name": f.stem, "kind": "color", "png": f"local-extra/{f.name}"})
+idx_path.write_text(json.dumps(idx, indent=2))
+PY
+fi
+
 echo "Syncing into web/public/library ..."
 rm -rf "${ROOT}/web/public/library"
 mkdir -p "${ROOT}/web/public/library"
