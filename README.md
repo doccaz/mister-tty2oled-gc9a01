@@ -17,6 +17,18 @@ command protocol reachable over WiFi via WebSocket, and MQTT
 notifications so things like Home Assistant can push text/image alerts
 to the display.
 
+## In action
+
+On a real MiSTer, running the unmodified `tty2oled.sh` over USB with the
+Sunton ESP32-2424S012C as the display (opening a few autoboot console
+cores):
+
+https://github.com/user-attachments/assets/e21d0f48-6ad6-45be-bac6-51889ecf6de4
+
+Full-color art (the extended `CMDCORC` command, sent by hand):
+
+![Full-color logo on the round display](docs/color-marquee.jpg)
+
 ## What's in this repo
 
 - **`firmware/`** — PlatformIO project for the ESP32-C3. Speaks the wire
