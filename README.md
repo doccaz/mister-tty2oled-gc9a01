@@ -23,7 +23,7 @@ On a real MiSTer, running the unmodified `tty2oled.sh` over USB with the
 Sunton ESP32-2424S012C as the display (opening a few autoboot console
 cores):
 
-https://github.com/user-attachments/assets/e21d0f48-6ad6-45be-bac6-51889ecf6de4
+https://github.com/user-attachments/assets/1d39b284-55ec-4096-ac44-fd0e79f9ddf0
 
 ([download the mp4](docs/mister-demo.mp4), 9 MB)
 
