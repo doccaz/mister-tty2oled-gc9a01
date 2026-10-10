@@ -134,6 +134,20 @@ hardware (see `protocol.cpp`'s `dispatch()`):
   `draw_circle`-style primitives, not ported bitmap assets — RAM is
   already tight (see "RAM headroom") and the reference's icon/test
   bitmaps are separate-provenance assets we don't have license to reuse.
+- `CMDSETTIME,<epoch>` / `CMDSHTIME` — added 2026-10-10. `tty2oled.sh`
+  sends `CMDSETTIME` unconditionally at startup (`sendtime()`), with the
+  MiSTer's local time as epoch seconds *already shifted by the timezone
+  offset*; before this was handled it fell through to the bare-corename
+  fallback and drew `CMDSETTIME,...` as the core name. The epoch is
+  stored with `settimeofday()` and read back with `gmtime_r()` (no TZ
+  handling on our side, since it's already local). `CMDSHTIME` (the
+  reference's name) shows `HH:MM` + date via `display_show_clock()`, or
+  "Time not set!" if none arrived. Not persisted - no RTC battery, but the
+  script re-sends it every start. `toInt()` is 32-bit `long`, so epochs
+  past 2038 would overflow. The reference only uses its RTC for the
+  Show Time/Date screensaver modes, which our `CMDSAVER` doesn't have, so
+  nothing shows the time unless `CMDSHTIME` is sent. Not yet tested on
+  real hardware.
 - `CMDHWINF` — replies over `Serial` with `HW<id>;<version>;` (no
   trailing newline; `web/src/serial.ts` tokenizes on `;`, not `\n`, same
   as `ttyack;`/`ttyrdy;`). Our hardware id is `HWGC9A01C` — a new value

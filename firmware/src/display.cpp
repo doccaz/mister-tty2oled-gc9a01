@@ -551,6 +551,23 @@ void display_show_sysinfo(const String &fwVersion) {
   gfx.print(ESP.getFreeHeap());
 }
 
+void display_show_clock(const String &timeStr, const String &dateStr) {
+  gfx.fillScreenFast(0x0000);
+  gfx.setTextColor(0xFFFF);
+  int16_t x1, y1;
+  uint16_t w, h;
+
+  gfx.setTextSize(5);
+  gfx.getTextBounds(timeStr, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY - 20);
+  gfx.print(timeStr);
+
+  gfx.setTextSize(2);
+  gfx.getTextBounds(dateStr, 0, 0, &x1, &y1, &w, &h);
+  gfx.setCursor(DISP_CX - w / 2, DISP_CY + 35);
+  gfx.print(dateStr);
+}
+
 namespace {
 void drawApStatusScreen() {
   gfx.fillScreenFast(0x0000);

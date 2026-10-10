@@ -181,6 +181,14 @@ export const COMMANDS: CommandDef[] = [
     summary: "Ask the device for its hardware id + firmware version (reply appears in the log below, not on screen).",
   }),
   cmd({ id: "CMDSHSYSHW", category: "Diagnostics", syntax: "CMDSHSYSHW", summary: "Show a system-info screen: firmware version, chip model, free heap." }),
+  cmd({
+    id: "CMDSETTIME",
+    category: "Diagnostics",
+    syntax: "CMDSETTIME,<epoch>",
+    summary: "Set the device clock (Unix seconds, already shifted to local time - tty2oled.sh sends this at startup).",
+    params: [{ key: "epoch", label: "epoch seconds", type: "number", default: String(Math.floor(Date.now() / 1000) - new Date().getTimezoneOffset() * 60) }],
+  }),
+  cmd({ id: "CMDSHTIME", category: "Diagnostics", syntax: "CMDSHTIME", summary: "Show the clock (HH:MM and date) set via CMDSETTIME." }),
   cmd({ id: "CMDTEST", category: "Diagnostics", syntax: "CMDTEST", summary: "Show a built-in concentric-ring test pattern." }),
   cmd({ id: "CMDBYE", category: "Diagnostics", syntax: "CMDBYE", summary: "Show a built-in farewell screen." }),
 

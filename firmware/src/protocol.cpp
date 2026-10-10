@@ -6,6 +6,8 @@
 #include "wifi_manager.h"
 #include <Arduino.h>
 #include <cstring>
+#include <sys/time.h>
+#include <time.h>
 
 namespace {
 
@@ -29,6 +31,31 @@ uint8_t legacyBuf[LEGACY_BUF_SIZE];
 // 40000 cap did.
 constexpr size_t COLOR_BUF_MAX = 20000;
 uint8_t colorBuf[COLOR_BUF_MAX];
+
+// Wall clock, set by CMDSETTIME. tty2oled.sh sends the MiSTer's local time
+// as epoch seconds already shifted by the timezone offset, so it's stored
+// as-is and read back with gmtime_r() (no TZ handling on this side).
+bool clockSet = false;
+
+void clockSetEpoch(time_t epoch) {
+  struct timeval tv = {epoch, 0};
+  settimeofday(&tv, nullptr);
+  clockSet = true;
+}
+
+void showClock() {
+  if (!clockSet) {
+    display_show_corename("Time not set!");
+    return;
+  }
+  time_t now = time(nullptr);
+  struct tm t;
+  gmtime_r(&now, &t);
+  char hm[8], date[16];
+  strftime(hm, sizeof(hm), "%H:%M", &t);
+  strftime(date, sizeof(date), "%d-%b-%y", &t);
+  display_show_clock(hm, date);
+}
 
 String actCorename = "No Core loaded";
 int cDelay = 15;         // ms delay before ttyack;, mirrors original cDelay
@@ -320,6 +347,11 @@ void protocol_dispatch_line(const String &cmd) {
     display_show_test_pattern();
   } else if (cmd == "CMDSHSYSHW") {
     display_show_sysinfo(FW_VERSION);
+  } else if (cmd.startsWith("CMDSETTIME")) {
+    long epoch = splitField(cmd, 1).toInt();
+    if (epoch > 0) clockSetEpoch((time_t)epoch);
+  } else if (cmd == "CMDSHTIME") {
+    showClock();
   } else if (cmd == "CMDHWINF") {
     // Reply grammar matches the reference (<hwid>;<version>;), but the id
     // itself is our own - a new device type outside the reference's

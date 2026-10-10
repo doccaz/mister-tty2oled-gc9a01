@@ -22,6 +22,7 @@ void display_show_error(const String &msg);
 void display_show_bye();                        // CMDBYE - built-in text/shape screen, not the original's icon bitmap
 void display_show_test_pattern();                // CMDTEST - concentric color rings, not the original's bitmap
 void display_show_sysinfo(const String &fwVersion); // CMDSHSYSHW
+void display_show_clock(const String &timeStr, const String &dateStr); // CMDSHTIME - centered HH:MM + date
 
 // WiFi bootstrap screens (see wifi_manager.h). display_toggle_wifi_qr()
 // flips between the AP-status screen most recently shown via

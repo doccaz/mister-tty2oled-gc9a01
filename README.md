@@ -214,7 +214,9 @@ bare line with no `CMD` prefix (legacy plain-corename fallback).
 primitives, not the original's bitmap assets), `CMDHWINF` (replies
 `HWGC9A01C;<version>;`), `CMDCLST,<transition>,<color>` (solid-color
 fill), `CMDSPIC[,<effect>]` (redisplay the last picture with a new
-transition), `CMDSSCP` (redisplay at reduced size).
+transition), `CMDSSCP` (redisplay at reduced size), `CMDSETTIME,<epoch>`
+(sets the device clock; `tty2oled.sh` sends it at startup) and `CMDSHTIME`
+(shows the clock as HH:MM plus date; not persisted across reboots).
 
 **Legacy picture transfer**: `CMDCOR,<name>,<effect>` or `CMDAPD,...`
 followed by a blocking, fixed-size read of exactly 2048 (1bpp XBM) or
